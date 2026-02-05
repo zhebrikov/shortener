@@ -11,9 +11,8 @@ import (
 	"github.com/zhebrikov/shortener/internal/service"
 )
 
-// handlerFromMain возвращает тот же обработчик, что регистрируется в main()
 func handlerFromMain() (h *handler.ShortenerHandler) {
-	shortener := service.NewShortener()
+	shortener := service.NewShortener("localhost:8080")
 	return handler.NewShortenerHandler(shortener)
 }
 

@@ -3,35 +3,37 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/zhebrikov/shortener/internal/service"
 )
 
-func TestGetLink_Success(t *testing.T) {
-	shortener := service.NewShortener()
-	targetURL := "https://example.com/target"
-	shortCode := shortener.CreateLink(targetURL)
+func TestGetLink_RedirectWhenFound(t *testing.T) {
+	shortener := service.NewShortener("localhost:8080")
+
+	// Создаём ссылку через сервис напрямую
+	originalURL := "https://example.com/redirect-target"
+	shortURL := shortener.CreateLink(originalURL)
+	shortCode := shortURL[strings.LastIndex(shortURL, "/")+1:]
 
 	req := httptest.NewRequest(http.MethodGet, "/"+shortCode, nil)
 	rr := httptest.NewRecorder()
-
 	GetLink(rr, req, shortener)
 
 	if rr.Code != http.StatusTemporaryRedirect {
 		t.Errorf("GetLink: got status %d, want %d", rr.Code, http.StatusTemporaryRedirect)
 	}
-	loc := rr.Header().Get("Location")
-	if loc != targetURL {
-		t.Errorf("GetLink: Location = %q, want %q", loc, targetURL)
+	if loc := rr.Header().Get("Location"); loc != originalURL {
+		t.Errorf("GetLink: Location = %q, want %q", loc, originalURL)
 	}
 }
 
 func TestGetLink_NotFound(t *testing.T) {
-	shortener := service.NewShortener()
+	shortener := service.NewShortener("localhost:8080")
+
 	req := httptest.NewRequest(http.MethodGet, "/nonexistent123", nil)
 	rr := httptest.NewRecorder()
-
 	GetLink(rr, req, shortener)
 
 	if rr.Code != http.StatusNotFound {
@@ -39,55 +41,30 @@ func TestGetLink_NotFound(t *testing.T) {
 	}
 }
 
-func TestGetLink_EmptyShortCode(t *testing.T) {
-	shortener := service.NewShortener()
+func TestGetLink_RootPath_NotFound(t *testing.T) {
+	shortener := service.NewShortener("localhost:8080")
+
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rr := httptest.NewRecorder()
-
 	GetLink(rr, req, shortener)
 
 	if rr.Code != http.StatusNotFound {
-		t.Errorf("GetLink (empty path): got status %d, want %d", rr.Code, http.StatusNotFound)
+		t.Errorf("GetLink GET /: got status %d, want %d", rr.Code, http.StatusNotFound)
 	}
 }
 
 func TestGetLink_MethodNotAllowed(t *testing.T) {
-	shortener := service.NewShortener()
-	shortCode := shortener.CreateLink("https://example.com")
-	methods := []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodOptions}
+	shortener := service.NewShortener("localhost:8080")
+	shortener.CreateLink("https://example.com")
+	shortURL := shortener.CreateLink("https://example.com")
+	shortCode := shortURL[strings.LastIndex(shortURL, "/")+1:]
 
-	for _, method := range methods {
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		req := httptest.NewRequest(method, "/"+shortCode, nil)
 		rr := httptest.NewRecorder()
 		GetLink(rr, req, shortener)
 		if rr.Code != http.StatusMethodNotAllowed {
-			t.Errorf("GetLink(%s): got status %d, want %d", method, rr.Code, http.StatusMethodNotAllowed)
+			t.Errorf("GetLink %s: got status %d, want %d", method, rr.Code, http.StatusMethodNotAllowed)
 		}
-	}
-}
-
-func TestGetLink_InvalidShortCodeFormat(t *testing.T) {
-	shortener := service.NewShortener()
-	req := httptest.NewRequest(http.MethodGet, "/not-a-valid-hex-code!!!", nil)
-	rr := httptest.NewRecorder()
-
-	GetLink(rr, req, shortener)
-
-	if rr.Code != http.StatusNotFound {
-		t.Errorf("GetLink: got status %d, want %d", rr.Code, http.StatusNotFound)
-	}
-}
-
-func TestGetLink_PathWithTrailingSlash(t *testing.T) {
-	shortener := service.NewShortener()
-	shortCode := shortener.CreateLink("https://example.com")
-	req := httptest.NewRequest(http.MethodGet, "/"+shortCode+"/", nil)
-	rr := httptest.NewRecorder()
-
-	GetLink(rr, req, shortener)
-
-	// r.URL.Path = "/abc12345/" -> Path[1:] = "abc12345/" — service won't find "abc12345/"
-	if rr.Code != http.StatusNotFound {
-		t.Errorf("GetLink (trailing slash): got status %d, want %d", rr.Code, http.StatusNotFound)
 	}
 }

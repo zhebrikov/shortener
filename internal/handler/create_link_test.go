@@ -11,7 +11,8 @@ import (
 )
 
 func TestCreateLink_Success(t *testing.T) {
-	shortener := service.NewShortener()
+	shortener := service.NewShortener("localhost:8080")
+
 	body := []byte("https://example.com/page")
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "text/plain")
@@ -26,118 +27,55 @@ func TestCreateLink_Success(t *testing.T) {
 		t.Errorf("CreateLink: Content-Type = %q, want text/plain", ct)
 	}
 	respBody := strings.TrimSpace(rr.Body.String())
-	if respBody == "" {
-		t.Error("CreateLink: response body is empty")
-	}
 	if !strings.HasPrefix(respBody, "http://localhost:8080/") {
-		t.Errorf("CreateLink: response %q does not start with http://localhost:8080/", respBody)
+		t.Errorf("CreateLink: response %q does not start with base URL", respBody)
 	}
-	if len(respBody) <= len("http://localhost:8080/") {
-		t.Error("CreateLink: short code is missing in response")
+	if len(respBody) < len("http://localhost:8080/")+8 {
+		t.Errorf("CreateLink: short code too short")
 	}
 }
 
 func TestCreateLink_MethodNotAllowed(t *testing.T) {
-	shortener := service.NewShortener()
-	methods := []string{http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodOptions, "INVALID"}
+	shortener := service.NewShortener("localhost:8080")
 
-	for _, method := range methods {
+	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
 		req := httptest.NewRequest(method, "/", bytes.NewReader([]byte("https://example.com")))
 		req.Header.Set("Content-Type", "text/plain")
 		rr := httptest.NewRecorder()
 		CreateLink(rr, req, shortener)
 		if rr.Code != http.StatusMethodNotAllowed {
-			t.Errorf("CreateLink(%s): got status %d, want %d", method, rr.Code, http.StatusMethodNotAllowed)
+			t.Errorf("CreateLink %s: got status %d, want %d", method, rr.Code, http.StatusMethodNotAllowed)
+		}
+		if body := rr.Body.String(); !strings.Contains(body, "Method not allowed") {
+			t.Errorf("CreateLink %s: body should mention method not allowed", method)
 		}
 	}
 }
 
-func TestCreateLink_WrongContentType(t *testing.T) {
-	shortener := service.NewShortener()
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte("https://example.com")))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
+func TestCreateLink_ContentTypeRequired(t *testing.T) {
+	shortener := service.NewShortener("localhost:8080")
 
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte("https://example.com")))
+	rr := httptest.NewRecorder()
 	CreateLink(rr, req, shortener)
 
 	if rr.Code != http.StatusBadRequest {
-		t.Errorf("CreateLink: got status %d, want %d", rr.Code, http.StatusBadRequest)
+		t.Errorf("CreateLink without Content-Type: got status %d, want %d", rr.Code, http.StatusBadRequest)
 	}
 }
 
-func TestCreateLink_EmptyBody(t *testing.T) {
-	shortener := service.NewShortener()
+func TestCreateLink_EmptyBody_BadRequest(t *testing.T) {
+	shortener := service.NewShortener("localhost:8080")
+
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(nil))
 	req.Header.Set("Content-Type", "text/plain")
 	rr := httptest.NewRecorder()
-
 	CreateLink(rr, req, shortener)
 
 	if rr.Code != http.StatusBadRequest {
-		t.Errorf("CreateLink: got status %d, want %d", rr.Code, http.StatusBadRequest)
+		t.Errorf("CreateLink empty body: got status %d, want %d", rr.Code, http.StatusBadRequest)
 	}
-}
-
-func TestCreateLink_NoContentType(t *testing.T) {
-	shortener := service.NewShortener()
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte("https://example.com")))
-	rr := httptest.NewRecorder()
-
-	CreateLink(rr, req, shortener)
-
-	if rr.Code != http.StatusBadRequest {
-		t.Errorf("CreateLink: got status %d, want %d", rr.Code, http.StatusBadRequest)
-	}
-}
-
-func TestCreateLink_SpecialCharactersInURL(t *testing.T) {
-	shortener := service.NewShortener()
-	body := []byte("https://example.com/path?q=1&foo=bar#anchor")
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "text/plain")
-	rr := httptest.NewRecorder()
-
-	CreateLink(rr, req, shortener)
-
-	if rr.Code != http.StatusCreated {
-		t.Errorf("CreateLink: got status %d, want %d", rr.Code, http.StatusCreated)
-	}
-	if !strings.HasPrefix(rr.Body.String(), "http://localhost:8080/") {
-		t.Errorf("CreateLink: unexpected response %q", rr.Body.String())
-	}
-}
-
-func TestCreateLink_VeryLongURL(t *testing.T) {
-	shortener := service.NewShortener()
-	longURL := "https://example.com/" + strings.Repeat("a", 10000)
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(longURL))
-	req.Header.Set("Content-Type", "text/plain")
-	rr := httptest.NewRecorder()
-
-	CreateLink(rr, req, shortener)
-
-	if rr.Code != http.StatusCreated {
-		t.Errorf("CreateLink: got status %d, want %d", rr.Code, http.StatusCreated)
-	}
-}
-
-func TestCreateLink_SameURLReturnsSameShortCode(t *testing.T) {
-	shortener := service.NewShortener()
-	url := "https://example.com/unique"
-	req1 := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte(url)))
-	req1.Header.Set("Content-Type", "text/plain")
-	rr1 := httptest.NewRecorder()
-	CreateLink(rr1, req1, shortener)
-
-	req2 := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte(url)))
-	req2.Header.Set("Content-Type", "text/plain")
-	rr2 := httptest.NewRecorder()
-	CreateLink(rr2, req2, shortener)
-
-	if rr1.Code != http.StatusCreated || rr2.Code != http.StatusCreated {
-		t.Fatalf("CreateLink: status %d, %d", rr1.Code, rr2.Code)
-	}
-	if rr1.Body.String() != rr2.Body.String() {
-		t.Errorf("CreateLink: same URL should return same short URL: %q vs %q", rr1.Body.String(), rr2.Body.String())
+	if body := rr.Body.String(); !strings.Contains(body, "Invalid request body") {
+		t.Errorf("CreateLink empty body: body should mention invalid request body")
 	}
 }

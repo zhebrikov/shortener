@@ -26,9 +26,7 @@ func CreateLink(w http.ResponseWriter, r *http.Request, shortener *service.Short
 
 	originalURL := string(body)
 
-	shortCode := shortener.CreateLink(originalURL)
-
-	shortURL := "http://localhost:8080/" + shortCode
+	shortURL := shortener.CreateLink(originalURL)
 
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusCreated)
