@@ -5,35 +5,65 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/zhebrikov/shortener/internal/handler"
+	"github.com/zhebrikov/shortener/internal/logger"
 	"github.com/zhebrikov/shortener/internal/service"
+	"go.uber.org/zap"
 )
 
-func main() {
+// getConfig возвращает serverAddress и baseURL: приоритет у переменных окружения, иначе флаги.
+func getConfig(serverAddrFlag, baseURLFlag string) (serverAddress, baseURL string) {
+	serverAddress = os.Getenv("SERVER_ADDRESS")
+	if serverAddress == "" {
+		serverAddress = serverAddrFlag
+	}
+	baseURL = os.Getenv("BASE_URL")
+	if baseURL == "" {
+		baseURL = baseURLFlag
+	}
+	return serverAddress, baseURL
+}
 
-	url := flag.String("a", "localhost:8080", "url of the server")
+// portFromServerAddress возвращает порт из адреса вида "host:port" или ":port".
+func portFromServerAddress(serverAddress string) (string, error) {
+	idx := strings.Index(serverAddress, ":")
+	if idx == -1 {
+		return "", fmt.Errorf("server address must contain port")
+	}
+	return serverAddress[idx:], nil
+}
+
+func main() {
+	serverAddrFlag := flag.String("a", "localhost:8080", "address of the HTTP server")
+	baseURLFlag := flag.String("b", "localhost:8080", "base URL for shortened links")
 	flag.Parse()
 
-	shortener := service.NewShortener(*url)
-	handler := handler.NewShortenerHandler(shortener)
+	serverAddress, baseURL := getConfig(*serverAddrFlag, *baseURLFlag)
 
-	r := chi.NewRouter()
-	r.Post("/", handler.CreateLink)
-	r.Get("/{shortCode}", handler.GetLink)
-
-	idx := strings.Index(*url, ":")
-	if idx == -1 {
-		panic("url must contain port")
+	port, err := portFromServerAddress(serverAddress)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	port := (*url)[idx:]
-	fmt.Println(port)
-	fmt.Println("Сервер запущен на http://localhost" + port)
+	if err := logger.Initialize("info"); err != nil {
+		log.Fatal(err)
+	}
 
-	err := http.ListenAndServe(port, r)
+	shortener := service.NewShortener(baseURL)
+	h := handler.NewShortenerHandler(shortener)
+
+	r := chi.NewRouter()
+	r.Use(logger.Middleware)
+	r.Post("/", h.CreateLink)
+	r.Get("/{shortCode}", h.GetLink)
+
+	logger.Log.Info("server started", zap.String("address", "http://localhost"+port))
+
+	err = http.ListenAndServe(port, r)
 	if err != nil {
 		log.Fatal(err)
 	}
