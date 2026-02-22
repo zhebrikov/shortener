@@ -21,7 +21,6 @@ func NewStorage(filename string) *Storage {
 }
 
 func (s *Storage) ReadStorage() ([]Link, error) {
-	log.Println("ReadStorage", s.filename)
 	data, err := os.ReadFile(s.filename)
 	if err != nil {
 		if os.IsNotExist(err) {
