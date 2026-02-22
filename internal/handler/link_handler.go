@@ -37,6 +37,6 @@ func (h *ShortenerHandler) GetLink(w http.ResponseWriter, r *http.Request) {
 	GetLink(w, r, h.shortener, h.storage)
 }
 
-func (h *ShortenerHandler) CreateLinkJson(w http.ResponseWriter, r *http.Request) {
-	CreateLinkJson(w, r, h.shortener, h.storage)
+func (h *ShortenerHandler) CreateLinkJSON(w http.ResponseWriter, r *http.Request) {
+	CreateLinkJSON(w, r, h.shortener, h.storage)
 }

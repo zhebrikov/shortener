@@ -53,7 +53,7 @@ func routerFromMain(t *testing.T, baseURL string) http.Handler {
 	r.Use(middleware.Gzip)
 	r.Post("/", h.CreateLink)
 	r.Get("/{shortCode}", h.GetLink)
-	r.Post("/api/shorten", h.CreateLinkJson)
+	r.Post("/api/shorten", h.CreateLinkJSON)
 	return r
 }
 
@@ -305,7 +305,7 @@ func TestMain_POST_ApiShorten_Success(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
-	h.CreateLinkJson(rr, req)
+	h.CreateLinkJSON(rr, req)
 
 	if rr.Code != http.StatusCreated {
 		t.Errorf("POST /api/shorten: got status %d, want %d", rr.Code, http.StatusCreated)
@@ -331,7 +331,7 @@ func TestMain_POST_ApiShorten_InvalidJSON_BadRequest(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
-	h.CreateLinkJson(rr, req)
+	h.CreateLinkJSON(rr, req)
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("POST /api/shorten invalid JSON: got status %d, want %d", rr.Code, http.StatusBadRequest)
@@ -346,7 +346,7 @@ func TestMain_POST_ApiShorten_MethodNotAllowed(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
-	h.CreateLinkJson(rr, req)
+	h.CreateLinkJSON(rr, req)
 
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Errorf("GET /api/shorten: got status %d, want %d", rr.Code, http.StatusMethodNotAllowed)

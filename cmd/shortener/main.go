@@ -70,7 +70,7 @@ func main() {
 	r.Use(middleware.Gzip)
 	r.Post("/", h.CreateLink)
 	r.Get("/{shortCode}", h.GetLink)
-	r.Post("/api/shorten", h.CreateLinkJson)
+	r.Post("/api/shorten", h.CreateLinkJSON)
 
 	logger.Log.Info("server started", zap.String("address", "http://localhost"+port))
 

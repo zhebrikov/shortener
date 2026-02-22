@@ -11,7 +11,7 @@ import (
 	"github.com/zhebrikov/shortener/internal/service"
 )
 
-func TestCreateLinkJson_Success(t *testing.T) {
+func TestCreateLinkJSON_Success(t *testing.T) {
 	shortener := service.NewShortener("localhost:8080")
 	store := mustTempStorage(t, "[]")
 
@@ -20,27 +20,27 @@ func TestCreateLinkJson_Success(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
-	CreateLinkJson(rr, req, shortener, store)
+	CreateLinkJSON(rr, req, shortener, store)
 
 	if rr.Code != http.StatusCreated {
-		t.Errorf("CreateLinkJson: got status %d, want %d", rr.Code, http.StatusCreated)
+		t.Errorf("CreateLinkJSON: got status %d, want %d", rr.Code, http.StatusCreated)
 	}
 	if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
-		t.Errorf("CreateLinkJson: Content-Type = %q, want application/json", ct)
+		t.Errorf("CreateLinkJSON: Content-Type = %q, want application/json", ct)
 	}
 	var out Input
 	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
-		t.Fatalf("CreateLinkJson: invalid JSON response: %v", err)
+		t.Fatalf("CreateLinkJSON: invalid JSON response: %v", err)
 	}
 	if !strings.HasPrefix(out.URL, "http://localhost:8080/") {
-		t.Errorf("CreateLinkJson: response url %q does not start with base URL", out.URL)
+		t.Errorf("CreateLinkJSON: response url %q does not start with base URL", out.URL)
 	}
 	if len(out.URL) < len("http://localhost:8080/")+8 {
-		t.Errorf("CreateLinkJson: short code too short")
+		t.Errorf("CreateLinkJSON: short code too short")
 	}
 }
 
-func TestCreateLinkJson_MethodNotAllowed(t *testing.T) {
+func TestCreateLinkJSON_MethodNotAllowed(t *testing.T) {
 	shortener := service.NewShortener("localhost:8080")
 	store := mustTempStorage(t, "[]")
 
@@ -49,17 +49,17 @@ func TestCreateLinkJson_MethodNotAllowed(t *testing.T) {
 		req := httptest.NewRequest(method, "/api/shorten", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		rr := httptest.NewRecorder()
-		CreateLinkJson(rr, req, shortener, store)
+		CreateLinkJSON(rr, req, shortener, store)
 		if rr.Code != http.StatusMethodNotAllowed {
-			t.Errorf("CreateLinkJson %s: got status %d, want %d", method, rr.Code, http.StatusMethodNotAllowed)
+			t.Errorf("CreateLinkJSON %s: got status %d, want %d", method, rr.Code, http.StatusMethodNotAllowed)
 		}
 		if body := rr.Body.String(); !strings.Contains(body, "Method not allowed") {
-			t.Errorf("CreateLinkJson %s: body should mention method not allowed", method)
+			t.Errorf("CreateLinkJSON %s: body should mention method not allowed", method)
 		}
 	}
 }
 
-func TestCreateLinkJson_InvalidJSON_BadRequest(t *testing.T) {
+func TestCreateLinkJSON_InvalidJSON_BadRequest(t *testing.T) {
 	shortener := service.NewShortener("localhost:8080")
 	store := mustTempStorage(t, "[]")
 
@@ -67,17 +67,17 @@ func TestCreateLinkJson_InvalidJSON_BadRequest(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
-	CreateLinkJson(rr, req, shortener, store)
+	CreateLinkJSON(rr, req, shortener, store)
 
 	if rr.Code != http.StatusBadRequest {
-		t.Errorf("CreateLinkJson invalid JSON: got status %d, want %d", rr.Code, http.StatusBadRequest)
+		t.Errorf("CreateLinkJSON invalid JSON: got status %d, want %d", rr.Code, http.StatusBadRequest)
 	}
 	if body := rr.Body.String(); !strings.Contains(body, "Invalid request body") {
-		t.Errorf("CreateLinkJson invalid JSON: body should mention invalid request body")
+		t.Errorf("CreateLinkJSON invalid JSON: body should mention invalid request body")
 	}
 }
 
-func TestCreateLinkJson_MalformedJSON_BadRequest(t *testing.T) {
+func TestCreateLinkJSON_MalformedJSON_BadRequest(t *testing.T) {
 	shortener := service.NewShortener("localhost:8080")
 	store := mustTempStorage(t, "[]")
 
@@ -85,14 +85,14 @@ func TestCreateLinkJson_MalformedJSON_BadRequest(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
-	CreateLinkJson(rr, req, shortener, store)
+	CreateLinkJSON(rr, req, shortener, store)
 
 	if rr.Code != http.StatusBadRequest {
-		t.Errorf("CreateLinkJson malformed JSON: got status %d, want %d", rr.Code, http.StatusBadRequest)
+		t.Errorf("CreateLinkJSON malformed JSON: got status %d, want %d", rr.Code, http.StatusBadRequest)
 	}
 }
 
-func TestCreateLinkJson_EmptyURL_ReturnsShortURL(t *testing.T) {
+func TestCreateLinkJSON_EmptyURL_ReturnsShortURL(t *testing.T) {
 	shortener := service.NewShortener("localhost:8080")
 	store := mustTempStorage(t, "[]")
 
@@ -101,16 +101,16 @@ func TestCreateLinkJson_EmptyURL_ReturnsShortURL(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
-	CreateLinkJson(rr, req, shortener, store)
+	CreateLinkJSON(rr, req, shortener, store)
 
 	if rr.Code != http.StatusCreated {
-		t.Errorf("CreateLinkJson empty URL: got status %d, want %d", rr.Code, http.StatusCreated)
+		t.Errorf("CreateLinkJSON empty URL: got status %d, want %d", rr.Code, http.StatusCreated)
 	}
 	var out Input
 	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
-		t.Fatalf("CreateLinkJson empty URL: invalid JSON response: %v", err)
+		t.Fatalf("CreateLinkJSON empty URL: invalid JSON response: %v", err)
 	}
 	if !strings.HasPrefix(out.URL, "http://localhost:8080/") {
-		t.Errorf("CreateLinkJson empty URL: response url %q does not start with base URL", out.URL)
+		t.Errorf("CreateLinkJSON empty URL: response url %q does not start with base URL", out.URL)
 	}
 }

@@ -13,7 +13,7 @@ type Input struct {
 	URL string `json:"url"`
 }
 
-func CreateLinkJson(
+func CreateLinkJSON(
 	w http.ResponseWriter,
 	r *http.Request,
 	shortener *service.Shortener,
@@ -48,13 +48,13 @@ func CreateLinkJson(
 		if link.OriginalURL == input.URL {
 			w.Header().Set("Content-Type", "application/json")
 			result := Input{URL: link.ShortURL}
-			resultJson, err := json.Marshal(result)
+			resultJSON, err := json.Marshal(result)
 			if err != nil {
 				http.Error(w, "Invalid request body", http.StatusBadRequest)
 				return
 			}
 			w.WriteHeader(http.StatusCreated)
-			w.Write(resultJson)
+			w.Write(resultJSON)
 			return
 		}
 	}
@@ -80,12 +80,12 @@ func CreateLinkJson(
 
 	w.Header().Set("Content-Type", "application/json")
 	result := Input{URL: shortURL}
-	resultJson, err := json.Marshal(result)
+	resultJSON, err := json.Marshal(result)
 	if err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	w.Write(resultJson)
+	w.Write(resultJSON)
 }

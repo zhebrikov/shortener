@@ -21,6 +21,13 @@ func NewShortener(baseURL string) *Shortener {
 	}
 }
 
+func (s *Shortener) shortURL(shortCode string) string {
+	if strings.HasPrefix(s.baseURL, "http://") || strings.HasPrefix(s.baseURL, "https://") {
+		return strings.TrimSuffix(s.baseURL, "/") + "/" + shortCode
+	}
+	return "http://" + strings.TrimSuffix(s.baseURL, "/") + "/" + shortCode
+}
+
 func (s *Shortener) CreateLink(originalURL string) string {
 	for i := 0; ; i++ {
 		input := originalURL
@@ -33,7 +40,7 @@ func (s *Shortener) CreateLink(originalURL string) string {
 
 		if _, exists := s.repoLink[shortCode]; !exists {
 			s.repoLink[shortCode] = originalURL
-			return "http://" + s.baseURL + "/" + shortCode
+			return s.shortURL(shortCode)
 		}
 	}
 }
