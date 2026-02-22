@@ -84,7 +84,7 @@ func CreateLinkJSON(
 
 	w.Header().Set("Content-Type", "application/json")
 	result := Output{Result: shortURL}
-	resultJson, err := json.Marshal(result)
+	resultJSON, err := json.Marshal(result)
 	if err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
