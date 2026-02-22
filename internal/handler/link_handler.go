@@ -33,3 +33,7 @@ func (h *ShortenerHandler) CreateLink(w http.ResponseWriter, r *http.Request) {
 func (h *ShortenerHandler) GetLink(w http.ResponseWriter, r *http.Request) {
 	GetLink(w, r, h.shortener)
 }
+
+func (h *ShortenerHandler) CreateLinkJson(w http.ResponseWriter, r *http.Request) {
+	CreateLinkJson(w, r, h.shortener)
+}

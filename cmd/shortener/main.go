@@ -60,6 +60,7 @@ func main() {
 	r.Use(logger.Middleware)
 	r.Post("/", h.CreateLink)
 	r.Get("/{shortCode}", h.GetLink)
+	r.Post("/api/shorten", h.CreateLinkJson)
 
 	logger.Log.Info("server started", zap.String("address", "http://localhost"+port))
 

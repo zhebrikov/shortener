@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,6 +26,7 @@ func routerFromMain(baseURL string) http.Handler {
 	r := chi.NewRouter()
 	r.Post("/", h.CreateLink)
 	r.Get("/{shortCode}", h.GetLink)
+	r.Post("/api/shorten", h.CreateLinkJson)
 	return r
 }
 
@@ -246,6 +248,62 @@ func TestMain_GET_RootPath_NotFound(t *testing.T) {
 	}
 }
 
+func TestMain_POST_ApiShorten_Success(t *testing.T) {
+	h := handlerFromMain()
+
+	body, _ := json.Marshal(map[string]string{"url": "https://example.com/page"})
+	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	h.CreateLinkJson(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Errorf("POST /api/shorten: got status %d, want %d", rr.Code, http.StatusCreated)
+	}
+	if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("POST /api/shorten: Content-Type = %q, want application/json", ct)
+	}
+	var out struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("POST /api/shorten: invalid JSON response: %v", err)
+	}
+	if !strings.HasPrefix(out.URL, "http://localhost:8080/") {
+		t.Errorf("POST /api/shorten: response url %q does not start with base URL", out.URL)
+	}
+}
+
+func TestMain_POST_ApiShorten_InvalidJSON_BadRequest(t *testing.T) {
+	h := handlerFromMain()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader([]byte("not json")))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	h.CreateLinkJson(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("POST /api/shorten invalid JSON: got status %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+}
+
+func TestMain_POST_ApiShorten_MethodNotAllowed(t *testing.T) {
+	h := handlerFromMain()
+
+	body, _ := json.Marshal(map[string]string{"url": "https://example.com"})
+	req := httptest.NewRequest(http.MethodGet, "/api/shorten", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	h.CreateLinkJson(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET /api/shorten: got status %d, want %d", rr.Code, http.StatusMethodNotAllowed)
+	}
+}
+
 // Тесты через роутер chi как в main — проверяют фактическую маршрутизацию приложения.
 
 func TestRouter_POST_CreateLink_Success(t *testing.T) {
@@ -341,5 +399,75 @@ func TestRouter_POST_NoContentType_BadRequest(t *testing.T) {
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("POST without Content-Type: got status %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+}
+
+func TestRouter_POST_ApiShorten_Success(t *testing.T) {
+	baseURL := "localhost:8080"
+	r := routerFromMain(baseURL)
+
+	body, _ := json.Marshal(map[string]string{"url": "https://example.com/page"})
+	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Errorf("POST /api/shorten: got status %d, want %d", rr.Code, http.StatusCreated)
+	}
+	var out struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("POST /api/shorten: invalid JSON response: %v", err)
+	}
+	if !strings.HasPrefix(out.URL, "http://"+baseURL+"/") {
+		t.Errorf("POST /api/shorten: response url %q does not start with base URL", out.URL)
+	}
+}
+
+func TestRouter_POST_ApiShorten_InvalidJSON_BadRequest(t *testing.T) {
+	r := routerFromMain("localhost:8080")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader([]byte("not json")))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("POST /api/shorten invalid JSON: got status %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+}
+
+func TestRouter_POST_ApiShorten_ThenRedirect(t *testing.T) {
+	r := routerFromMain("localhost:8080")
+
+	body, _ := json.Marshal(map[string]string{"url": "https://example.com/from-json"})
+	postReq := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
+	postReq.Header.Set("Content-Type", "application/json")
+	postRR := httptest.NewRecorder()
+	r.ServeHTTP(postRR, postReq)
+	if postRR.Code != http.StatusCreated {
+		t.Fatalf("POST /api/shorten: got status %d", postRR.Code)
+	}
+	var out struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(postRR.Body).Decode(&out); err != nil {
+		t.Fatalf("POST /api/shorten: invalid JSON: %v", err)
+	}
+	shortCode := out.URL[strings.LastIndex(out.URL, "/")+1:]
+
+	getReq := httptest.NewRequest(http.MethodGet, "/"+shortCode, nil)
+	getRR := httptest.NewRecorder()
+	r.ServeHTTP(getRR, getReq)
+
+	if getRR.Code != http.StatusTemporaryRedirect {
+		t.Errorf("GET /%s: got status %d, want %d", shortCode, getRR.Code, http.StatusTemporaryRedirect)
+	}
+	if loc := getRR.Header().Get("Location"); loc != "https://example.com/from-json" {
+		t.Errorf("GET /%s: Location = %q, want https://example.com/from-json", shortCode, loc)
 	}
 }
