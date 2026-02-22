@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +13,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/zhebrikov/shortener/internal/handler"
+	"github.com/zhebrikov/shortener/internal/logger"
+	"github.com/zhebrikov/shortener/internal/middleware"
 	"github.com/zhebrikov/shortener/internal/service"
 )
 
@@ -24,6 +28,8 @@ func routerFromMain(baseURL string) http.Handler {
 	shortener := service.NewShortener(baseURL)
 	h := handler.NewShortenerHandler(shortener)
 	r := chi.NewRouter()
+	r.Use(logger.Middleware)
+	r.Use(middleware.Gzip)
 	r.Post("/", h.CreateLink)
 	r.Get("/{shortCode}", h.GetLink)
 	r.Post("/api/shorten", h.CreateLinkJson)
@@ -469,5 +475,72 @@ func TestRouter_POST_ApiShorten_ThenRedirect(t *testing.T) {
 	}
 	if loc := getRR.Header().Get("Location"); loc != "https://example.com/from-json" {
 		t.Errorf("GET /%s: Location = %q, want https://example.com/from-json", shortCode, loc)
+	}
+}
+
+// Тесты Gzip middleware через роутер (как в main).
+
+func TestRouter_Gzip_AcceptEncoding_ReturnsCompressed(t *testing.T) {
+	r := routerFromMain("localhost:8080")
+
+	body, _ := json.Marshal(map[string]string{"url": "https://example.com/page"})
+	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept-Encoding", "gzip")
+	rr := httptest.NewRecorder()
+
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Errorf("POST /api/shorten: got status %d, want %d", rr.Code, http.StatusCreated)
+	}
+	if enc := rr.Header().Get("Content-Encoding"); enc != "gzip" {
+		t.Errorf("Content-Encoding = %q, want gzip", enc)
+	}
+
+	gr, err := gzip.NewReader(rr.Body)
+	if err != nil {
+		t.Fatalf("response body is not gzip: %v", err)
+	}
+	defer gr.Close()
+	decoded, err := io.ReadAll(gr)
+	if err != nil {
+		t.Fatalf("gzip read: %v", err)
+	}
+	var out struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(decoded, &out); err != nil {
+		t.Fatalf("decoded JSON: %v", err)
+	}
+	if !strings.HasPrefix(out.URL, "http://localhost:8080/") {
+		t.Errorf("response url %q does not start with base URL", out.URL)
+	}
+}
+
+func TestRouter_Gzip_NoAcceptEncoding_ReturnsUncompressed(t *testing.T) {
+	r := routerFromMain("localhost:8080")
+
+	body, _ := json.Marshal(map[string]string{"url": "https://example.com/page"})
+	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Errorf("POST /api/shorten: got status %d, want %d", rr.Code, http.StatusCreated)
+	}
+	if enc := rr.Header().Get("Content-Encoding"); enc != "" {
+		t.Errorf("Content-Encoding = %q, want empty (no compression)", enc)
+	}
+	var out struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("response JSON: %v", err)
+	}
+	if !strings.HasPrefix(out.URL, "http://localhost:8080/") {
+		t.Errorf("response url %q does not start with base URL", out.URL)
 	}
 }

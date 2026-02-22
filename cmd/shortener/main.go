@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/zhebrikov/shortener/internal/handler"
 	"github.com/zhebrikov/shortener/internal/logger"
+	"github.com/zhebrikov/shortener/internal/middleware"
 	"github.com/zhebrikov/shortener/internal/service"
 	"go.uber.org/zap"
 )
@@ -58,6 +59,7 @@ func main() {
 
 	r := chi.NewRouter()
 	r.Use(logger.Middleware)
+	r.Use(middleware.Gzip)
 	r.Post("/", h.CreateLink)
 	r.Get("/{shortCode}", h.GetLink)
 	r.Post("/api/shorten", h.CreateLinkJson)
