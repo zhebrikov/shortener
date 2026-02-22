@@ -551,13 +551,13 @@ func TestRouter_Gzip_AcceptEncoding_ReturnsCompressed(t *testing.T) {
 		t.Fatalf("gzip read: %v", err)
 	}
 	var out struct {
-		URL string `json:"url"`
+		Result string `json:"result"`
 	}
 	if err := json.Unmarshal(decoded, &out); err != nil {
 		t.Fatalf("decoded JSON: %v", err)
 	}
-	if !strings.HasPrefix(out.URL, "http://localhost:8080/") {
-		t.Errorf("response url %q does not start with base URL", out.URL)
+	if !strings.HasPrefix(out.Result, "http://localhost:8080/") {
+		t.Errorf("response url %q does not start with base URL", out.Result)
 	}
 }
 
@@ -578,12 +578,12 @@ func TestRouter_Gzip_NoAcceptEncoding_ReturnsUncompressed(t *testing.T) {
 		t.Errorf("Content-Encoding = %q, want empty (no compression)", enc)
 	}
 	var out struct {
-		URL string `json:"url"`
+		Result string `json:"result"`
 	}
 	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
 		t.Fatalf("response JSON: %v", err)
 	}
-	if !strings.HasPrefix(out.URL, "http://localhost:8080/") {
-		t.Errorf("response url %q does not start with base URL", out.URL)
+	if !strings.HasPrefix(out.Result, "http://localhost:8080/") {
+		t.Errorf("response url %q does not start with base URL", out.Result)
 	}
 }
