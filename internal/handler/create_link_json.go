@@ -12,6 +12,10 @@ type Input struct {
 	URL string `json:"url"`
 }
 
+type Output struct {
+	Result string `json:"result"`
+}
+
 func CreateLinkJson(w http.ResponseWriter, r *http.Request, shortener *service.Shortener) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -34,7 +38,7 @@ func CreateLinkJson(w http.ResponseWriter, r *http.Request, shortener *service.S
 	shortURL := shortener.CreateLink(input.URL)
 
 	w.Header().Set("Content-Type", "application/json")
-	result := Input{URL: shortURL}
+	result := Output{Result: shortURL}
 	resultJson, err := json.Marshal(result)
 	if err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
