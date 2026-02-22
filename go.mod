@@ -1,6 +1,6 @@
 module github.com/zhebrikov/shortener
 
-go 1.25.0
+go 1.24.13
 
 require (
 	github.com/caarlos0/env/v6 v6.10.1 // indirect
