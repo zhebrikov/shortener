@@ -13,11 +13,12 @@ import (
 	"github.com/zhebrikov/shortener/internal/logger"
 	"github.com/zhebrikov/shortener/internal/middleware"
 	"github.com/zhebrikov/shortener/internal/service"
+	"github.com/zhebrikov/shortener/internal/storage"
 	"go.uber.org/zap"
 )
 
 // getConfig возвращает serverAddress и baseURL: приоритет у переменных окружения, иначе флаги.
-func getConfig(serverAddrFlag, baseURLFlag string) (serverAddress, baseURL string) {
+func getConfig(serverAddrFlag, baseURLFlag, fileStorageFlag string) (serverAddress, baseURL, fileStorage string) {
 	serverAddress = os.Getenv("SERVER_ADDRESS")
 	if serverAddress == "" {
 		serverAddress = serverAddrFlag
@@ -26,7 +27,11 @@ func getConfig(serverAddrFlag, baseURLFlag string) (serverAddress, baseURL strin
 	if baseURL == "" {
 		baseURL = baseURLFlag
 	}
-	return serverAddress, baseURL
+	fileStorage = os.Getenv("FILE_STORAGE_PATH")
+	if fileStorage == "" {
+		fileStorage = fileStorageFlag
+	}
+	return serverAddress, baseURL, fileStorage
 }
 
 // portFromServerAddress возвращает порт из адреса вида "host:port" или ":port".
@@ -41,9 +46,12 @@ func portFromServerAddress(serverAddress string) (string, error) {
 func main() {
 	serverAddrFlag := flag.String("a", "localhost:8080", "address of the HTTP server")
 	baseURLFlag := flag.String("b", "localhost:8080", "base URL for shortened links")
+	fileStorageFlag := flag.String("f", "file.json", "file to store the links")
 	flag.Parse()
 
-	serverAddress, baseURL := getConfig(*serverAddrFlag, *baseURLFlag)
+	serverAddress, baseURL, fileStorage := getConfig(*serverAddrFlag, *baseURLFlag, *fileStorageFlag)
+
+	storage := storage.NewStorage(fileStorage)
 
 	port, err := portFromServerAddress(serverAddress)
 	if err != nil {
@@ -55,7 +63,7 @@ func main() {
 	}
 
 	shortener := service.NewShortener(baseURL)
-	h := handler.NewShortenerHandler(shortener)
+	h := handler.NewShortenerHandler(shortener, storage)
 
 	r := chi.NewRouter()
 	r.Use(logger.Middleware)

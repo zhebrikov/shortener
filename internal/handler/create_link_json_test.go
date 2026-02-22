@@ -13,13 +13,14 @@ import (
 
 func TestCreateLinkJson_Success(t *testing.T) {
 	shortener := service.NewShortener("localhost:8080")
+	store := mustTempStorage(t, "[]")
 
 	body, _ := json.Marshal(Input{URL: "https://example.com/page"})
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
-	CreateLinkJson(rr, req, shortener)
+	CreateLinkJson(rr, req, shortener, store)
 
 	if rr.Code != http.StatusCreated {
 		t.Errorf("CreateLinkJson: got status %d, want %d", rr.Code, http.StatusCreated)
@@ -41,13 +42,14 @@ func TestCreateLinkJson_Success(t *testing.T) {
 
 func TestCreateLinkJson_MethodNotAllowed(t *testing.T) {
 	shortener := service.NewShortener("localhost:8080")
+	store := mustTempStorage(t, "[]")
 
 	body, _ := json.Marshal(Input{URL: "https://example.com"})
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
 		req := httptest.NewRequest(method, "/api/shorten", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		rr := httptest.NewRecorder()
-		CreateLinkJson(rr, req, shortener)
+		CreateLinkJson(rr, req, shortener, store)
 		if rr.Code != http.StatusMethodNotAllowed {
 			t.Errorf("CreateLinkJson %s: got status %d, want %d", method, rr.Code, http.StatusMethodNotAllowed)
 		}
@@ -59,12 +61,13 @@ func TestCreateLinkJson_MethodNotAllowed(t *testing.T) {
 
 func TestCreateLinkJson_InvalidJSON_BadRequest(t *testing.T) {
 	shortener := service.NewShortener("localhost:8080")
+	store := mustTempStorage(t, "[]")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader([]byte("not json")))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
-	CreateLinkJson(rr, req, shortener)
+	CreateLinkJson(rr, req, shortener, store)
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("CreateLinkJson invalid JSON: got status %d, want %d", rr.Code, http.StatusBadRequest)
@@ -76,12 +79,13 @@ func TestCreateLinkJson_InvalidJSON_BadRequest(t *testing.T) {
 
 func TestCreateLinkJson_MalformedJSON_BadRequest(t *testing.T) {
 	shortener := service.NewShortener("localhost:8080")
+	store := mustTempStorage(t, "[]")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader([]byte(`{"url": }`)))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
-	CreateLinkJson(rr, req, shortener)
+	CreateLinkJson(rr, req, shortener, store)
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("CreateLinkJson malformed JSON: got status %d, want %d", rr.Code, http.StatusBadRequest)
@@ -90,13 +94,14 @@ func TestCreateLinkJson_MalformedJSON_BadRequest(t *testing.T) {
 
 func TestCreateLinkJson_EmptyURL_ReturnsShortURL(t *testing.T) {
 	shortener := service.NewShortener("localhost:8080")
+	store := mustTempStorage(t, "[]")
 
 	body, _ := json.Marshal(Input{URL: ""})
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
-	CreateLinkJson(rr, req, shortener)
+	CreateLinkJson(rr, req, shortener, store)
 
 	if rr.Code != http.StatusCreated {
 		t.Errorf("CreateLinkJson empty URL: got status %d, want %d", rr.Code, http.StatusCreated)

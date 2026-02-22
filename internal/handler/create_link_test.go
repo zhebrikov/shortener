@@ -12,13 +12,14 @@ import (
 
 func TestCreateLink_Success(t *testing.T) {
 	shortener := service.NewShortener("localhost:8080")
+	store := mustTempStorage(t, "[]")
 
 	body := []byte("https://example.com/page")
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "text/plain")
 	rr := httptest.NewRecorder()
 
-	CreateLink(rr, req, shortener)
+	CreateLink(rr, req, shortener, store)
 
 	if rr.Code != http.StatusCreated {
 		t.Errorf("CreateLink: got status %d, want %d", rr.Code, http.StatusCreated)
@@ -37,12 +38,13 @@ func TestCreateLink_Success(t *testing.T) {
 
 func TestCreateLink_MethodNotAllowed(t *testing.T) {
 	shortener := service.NewShortener("localhost:8080")
+	store := mustTempStorage(t, "[]")
 
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
 		req := httptest.NewRequest(method, "/", bytes.NewReader([]byte("https://example.com")))
 		req.Header.Set("Content-Type", "text/plain")
 		rr := httptest.NewRecorder()
-		CreateLink(rr, req, shortener)
+		CreateLink(rr, req, shortener, store)
 		if rr.Code != http.StatusMethodNotAllowed {
 			t.Errorf("CreateLink %s: got status %d, want %d", method, rr.Code, http.StatusMethodNotAllowed)
 		}
@@ -54,10 +56,11 @@ func TestCreateLink_MethodNotAllowed(t *testing.T) {
 
 func TestCreateLink_ContentTypeRequired(t *testing.T) {
 	shortener := service.NewShortener("localhost:8080")
+	store := mustTempStorage(t, "[]")
 
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte("https://example.com")))
 	rr := httptest.NewRecorder()
-	CreateLink(rr, req, shortener)
+	CreateLink(rr, req, shortener, store)
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("CreateLink without Content-Type: got status %d, want %d", rr.Code, http.StatusBadRequest)
@@ -66,11 +69,12 @@ func TestCreateLink_ContentTypeRequired(t *testing.T) {
 
 func TestCreateLink_EmptyBody_BadRequest(t *testing.T) {
 	shortener := service.NewShortener("localhost:8080")
+	store := mustTempStorage(t, "[]")
 
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(nil))
 	req.Header.Set("Content-Type", "text/plain")
 	rr := httptest.NewRecorder()
-	CreateLink(rr, req, shortener)
+	CreateLink(rr, req, shortener, store)
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("CreateLink empty body: got status %d, want %d", rr.Code, http.StatusBadRequest)

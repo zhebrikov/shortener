@@ -4,6 +4,9 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
+	"strings"
+
+	"github.com/zhebrikov/shortener/internal/storage"
 )
 
 type Shortener struct {
@@ -35,10 +38,16 @@ func (s *Shortener) CreateLink(originalURL string) string {
 	}
 }
 
-func (s *Shortener) GetLink(shortCode string) *string {
-	url, ok := s.repoLink[shortCode]
-	if !ok {
+func (s *Shortener) GetLink(shortCode string, store *storage.Storage) *string {
+	links, err := store.ReadStorage()
+	if err != nil {
 		return nil
 	}
-	return &url
+	for _, link := range links {
+		// ShortURL в storage может быть полный URL или только shortCode
+		if link.ShortURL == shortCode || strings.HasSuffix(link.ShortURL, "/"+shortCode) {
+			return &link.OriginalURL
+		}
+	}
+	return nil
 }

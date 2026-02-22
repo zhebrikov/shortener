@@ -16,17 +16,38 @@ import (
 	"github.com/zhebrikov/shortener/internal/logger"
 	"github.com/zhebrikov/shortener/internal/middleware"
 	"github.com/zhebrikov/shortener/internal/service"
+	"github.com/zhebrikov/shortener/internal/storage"
 )
 
-func handlerFromMain() (h *handler.ShortenerHandler) {
+// storageFromTestFile создаёт временный JSON-файл для тестов storage (пустой массив).
+func storageFromTestFile(t *testing.T) *storage.Storage {
+	t.Helper()
+	f, err := os.CreateTemp("", "shortener_*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("[]"); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		t.Fatal(err)
+	}
+	f.Close()
+	return storage.NewStorage(f.Name())
+}
+
+func handlerFromMain(t *testing.T) *handler.ShortenerHandler {
+	t.Helper()
 	shortener := service.NewShortener("localhost:8080")
-	return handler.NewShortenerHandler(shortener)
+	store := storageFromTestFile(t)
+	return handler.NewShortenerHandler(shortener, store)
 }
 
 // routerFromMain возвращает роутер в том же виде, что и в main (для интеграционных тестов).
-func routerFromMain(baseURL string) http.Handler {
+func routerFromMain(t *testing.T, baseURL string) http.Handler {
+	t.Helper()
 	shortener := service.NewShortener(baseURL)
-	h := handler.NewShortenerHandler(shortener)
+	store := storageFromTestFile(t)
+	h := handler.NewShortenerHandler(shortener, store)
 	r := chi.NewRouter()
 	r.Use(logger.Middleware)
 	r.Use(middleware.Gzip)
@@ -39,6 +60,7 @@ func routerFromMain(baseURL string) http.Handler {
 func TestGetConfig(t *testing.T) {
 	const defaultAddr = "localhost:8080"
 	const defaultBase = "http://example.com"
+	const defaultFile = "file.json"
 
 	saveEnv := func(key string) (string, bool) {
 		v, ok := os.LookupEnv(key)
@@ -55,62 +77,83 @@ func TestGetConfig(t *testing.T) {
 	t.Run("no env uses flags", func(t *testing.T) {
 		oldAddr, addrOk := saveEnv("SERVER_ADDRESS")
 		oldBase, baseOk := saveEnv("BASE_URL")
+		oldFile, fileOk := saveEnv("FILE_STORAGE_PATH")
 		os.Unsetenv("SERVER_ADDRESS")
 		os.Unsetenv("BASE_URL")
+		os.Unsetenv("FILE_STORAGE_PATH")
 		defer restoreEnv("SERVER_ADDRESS", oldAddr, addrOk)
 		defer restoreEnv("BASE_URL", oldBase, baseOk)
+		defer restoreEnv("FILE_STORAGE_PATH", oldFile, fileOk)
 
-		gotAddr, gotBase := getConfig(defaultAddr, defaultBase)
-		if gotAddr != defaultAddr || gotBase != defaultBase {
-			t.Errorf("getConfig() = %q, %q; want %q, %q", gotAddr, gotBase, defaultAddr, defaultBase)
+		gotAddr, gotBase, gotFile := getConfig(defaultAddr, defaultBase, defaultFile)
+		if gotAddr != defaultAddr || gotBase != defaultBase || gotFile != defaultFile {
+			t.Errorf("getConfig() = %q, %q, %q; want %q, %q, %q", gotAddr, gotBase, gotFile, defaultAddr, defaultBase, defaultFile)
 		}
 	})
 
 	t.Run("SERVER_ADDRESS overrides flag", func(t *testing.T) {
 		oldAddr, addrOk := saveEnv("SERVER_ADDRESS")
 		oldBase, baseOk := saveEnv("BASE_URL")
+		oldFile, fileOk := saveEnv("FILE_STORAGE_PATH")
 		os.Setenv("SERVER_ADDRESS", "0.0.0.0:9090")
 		os.Unsetenv("BASE_URL")
+		os.Unsetenv("FILE_STORAGE_PATH")
 		defer restoreEnv("SERVER_ADDRESS", oldAddr, addrOk)
 		defer restoreEnv("BASE_URL", oldBase, baseOk)
+		defer restoreEnv("FILE_STORAGE_PATH", oldFile, fileOk)
 
-		gotAddr, gotBase := getConfig(defaultAddr, defaultBase)
+		gotAddr, gotBase, gotFile := getConfig(defaultAddr, defaultBase, defaultFile)
 		if gotAddr != "0.0.0.0:9090" {
 			t.Errorf("getConfig() serverAddress = %q; want 0.0.0.0:9090", gotAddr)
 		}
 		if gotBase != defaultBase {
 			t.Errorf("getConfig() baseURL = %q; want %q", gotBase, defaultBase)
 		}
+		if gotFile != defaultFile {
+			t.Errorf("getConfig() fileStorage = %q; want %q", gotFile, defaultFile)
+		}
 	})
 
 	t.Run("BASE_URL overrides flag", func(t *testing.T) {
 		oldAddr, addrOk := saveEnv("SERVER_ADDRESS")
 		oldBase, baseOk := saveEnv("BASE_URL")
+		oldFile, fileOk := saveEnv("FILE_STORAGE_PATH")
 		os.Unsetenv("SERVER_ADDRESS")
 		os.Setenv("BASE_URL", "https://short.example.com")
+		os.Unsetenv("FILE_STORAGE_PATH")
 		defer restoreEnv("SERVER_ADDRESS", oldAddr, addrOk)
 		defer restoreEnv("BASE_URL", oldBase, baseOk)
+		defer restoreEnv("FILE_STORAGE_PATH", oldFile, fileOk)
 
-		gotAddr, gotBase := getConfig(defaultAddr, defaultBase)
+		gotAddr, gotBase, gotFile := getConfig(defaultAddr, defaultBase, defaultFile)
 		if gotAddr != defaultAddr {
 			t.Errorf("getConfig() serverAddress = %q; want %q", gotAddr, defaultAddr)
 		}
 		if gotBase != "https://short.example.com" {
 			t.Errorf("getConfig() baseURL = %q; want https://short.example.com", gotBase)
 		}
+		if gotFile != defaultFile {
+			t.Errorf("getConfig() fileStorage = %q; want %q", gotFile, defaultFile)
+		}
 	})
 
 	t.Run("both env override flags", func(t *testing.T) {
 		oldAddr, addrOk := saveEnv("SERVER_ADDRESS")
 		oldBase, baseOk := saveEnv("BASE_URL")
+		oldFile, fileOk := saveEnv("FILE_STORAGE_PATH")
 		os.Setenv("SERVER_ADDRESS", ":3000")
 		os.Setenv("BASE_URL", "https://s.example.com")
+		os.Unsetenv("FILE_STORAGE_PATH")
 		defer restoreEnv("SERVER_ADDRESS", oldAddr, addrOk)
 		defer restoreEnv("BASE_URL", oldBase, baseOk)
+		defer restoreEnv("FILE_STORAGE_PATH", oldFile, fileOk)
 
-		gotAddr, gotBase := getConfig(defaultAddr, defaultBase)
+		gotAddr, gotBase, gotFile := getConfig(defaultAddr, defaultBase, defaultFile)
 		if gotAddr != ":3000" || gotBase != "https://s.example.com" {
 			t.Errorf("getConfig() = %q, %q; want :3000, https://s.example.com", gotAddr, gotBase)
+		}
+		if gotFile != defaultFile {
+			t.Errorf("getConfig() fileStorage = %q; want %q", gotFile, defaultFile)
 		}
 	})
 }
@@ -142,7 +185,7 @@ func TestPortFromServerAddress(t *testing.T) {
 }
 
 func TestMain_POST_CreateLink_Success(t *testing.T) {
-	h := handlerFromMain()
+	h := handlerFromMain(t)
 
 	body := []byte("https://example.com/page")
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
@@ -164,7 +207,7 @@ func TestMain_POST_CreateLink_Success(t *testing.T) {
 }
 
 func TestMain_GET_RedirectWhenFound(t *testing.T) {
-	h := handlerFromMain()
+	h := handlerFromMain(t)
 
 	// Создаём ссылку через POST
 	body := []byte("https://example.com/redirect-target")
@@ -192,7 +235,7 @@ func TestMain_GET_RedirectWhenFound(t *testing.T) {
 }
 
 func TestMain_GET_NotFound(t *testing.T) {
-	h := handlerFromMain()
+	h := handlerFromMain(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/nonexistent123", nil)
 	rr := httptest.NewRecorder()
@@ -204,7 +247,7 @@ func TestMain_GET_NotFound(t *testing.T) {
 }
 
 func TestMain_MethodNotAllowed(t *testing.T) {
-	h := handlerFromMain()
+	h := handlerFromMain(t)
 
 	methods := []string{http.MethodPut, http.MethodDelete, http.MethodPatch}
 	for _, method := range methods {
@@ -218,7 +261,7 @@ func TestMain_MethodNotAllowed(t *testing.T) {
 }
 
 func TestMain_POST_NoContentType_BadRequest(t *testing.T) {
-	h := handlerFromMain()
+	h := handlerFromMain(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte("https://example.com")))
 	rr := httptest.NewRecorder()
@@ -230,7 +273,7 @@ func TestMain_POST_NoContentType_BadRequest(t *testing.T) {
 }
 
 func TestMain_POST_EmptyBody_BadRequest(t *testing.T) {
-	h := handlerFromMain()
+	h := handlerFromMain(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(nil))
 	req.Header.Set("Content-Type", "text/plain")
@@ -243,7 +286,7 @@ func TestMain_POST_EmptyBody_BadRequest(t *testing.T) {
 }
 
 func TestMain_GET_RootPath_NotFound(t *testing.T) {
-	h := handlerFromMain()
+	h := handlerFromMain(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rr := httptest.NewRecorder()
@@ -255,7 +298,7 @@ func TestMain_GET_RootPath_NotFound(t *testing.T) {
 }
 
 func TestMain_POST_ApiShorten_Success(t *testing.T) {
-	h := handlerFromMain()
+	h := handlerFromMain(t)
 
 	body, _ := json.Marshal(map[string]string{"url": "https://example.com/page"})
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
@@ -282,7 +325,7 @@ func TestMain_POST_ApiShorten_Success(t *testing.T) {
 }
 
 func TestMain_POST_ApiShorten_InvalidJSON_BadRequest(t *testing.T) {
-	h := handlerFromMain()
+	h := handlerFromMain(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader([]byte("not json")))
 	req.Header.Set("Content-Type", "application/json")
@@ -296,7 +339,7 @@ func TestMain_POST_ApiShorten_InvalidJSON_BadRequest(t *testing.T) {
 }
 
 func TestMain_POST_ApiShorten_MethodNotAllowed(t *testing.T) {
-	h := handlerFromMain()
+	h := handlerFromMain(t)
 
 	body, _ := json.Marshal(map[string]string{"url": "https://example.com"})
 	req := httptest.NewRequest(http.MethodGet, "/api/shorten", bytes.NewReader(body))
@@ -314,7 +357,7 @@ func TestMain_POST_ApiShorten_MethodNotAllowed(t *testing.T) {
 
 func TestRouter_POST_CreateLink_Success(t *testing.T) {
 	baseURL := "localhost:8080"
-	r := routerFromMain(baseURL)
+	r := routerFromMain(t, baseURL)
 
 	body := []byte("https://example.com/page")
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
@@ -333,7 +376,7 @@ func TestRouter_POST_CreateLink_Success(t *testing.T) {
 }
 
 func TestRouter_GET_RedirectWhenFound(t *testing.T) {
-	r := routerFromMain("localhost:8080")
+	r := routerFromMain(t, "localhost:8080")
 
 	body := []byte("https://example.com/redirect-target")
 	postReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
@@ -359,7 +402,7 @@ func TestRouter_GET_RedirectWhenFound(t *testing.T) {
 }
 
 func TestRouter_GET_NotFound(t *testing.T) {
-	r := routerFromMain("localhost:8080")
+	r := routerFromMain(t, "localhost:8080")
 
 	req := httptest.NewRequest(http.MethodGet, "/nonexistent123", nil)
 	rr := httptest.NewRecorder()
@@ -371,7 +414,7 @@ func TestRouter_GET_NotFound(t *testing.T) {
 }
 
 func TestRouter_GET_RootPath_NotFound(t *testing.T) {
-	r := routerFromMain("localhost:8080")
+	r := routerFromMain(t, "localhost:8080")
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rr := httptest.NewRecorder()
@@ -384,7 +427,7 @@ func TestRouter_GET_RootPath_NotFound(t *testing.T) {
 }
 
 func TestRouter_POST_EmptyBody_BadRequest(t *testing.T) {
-	r := routerFromMain("localhost:8080")
+	r := routerFromMain(t, "localhost:8080")
 
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(nil))
 	req.Header.Set("Content-Type", "text/plain")
@@ -397,7 +440,7 @@ func TestRouter_POST_EmptyBody_BadRequest(t *testing.T) {
 }
 
 func TestRouter_POST_NoContentType_BadRequest(t *testing.T) {
-	r := routerFromMain("localhost:8080")
+	r := routerFromMain(t, "localhost:8080")
 
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte("https://example.com")))
 	rr := httptest.NewRecorder()
@@ -410,7 +453,7 @@ func TestRouter_POST_NoContentType_BadRequest(t *testing.T) {
 
 func TestRouter_POST_ApiShorten_Success(t *testing.T) {
 	baseURL := "localhost:8080"
-	r := routerFromMain(baseURL)
+	r := routerFromMain(t, baseURL)
 
 	body, _ := json.Marshal(map[string]string{"url": "https://example.com/page"})
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
@@ -434,7 +477,7 @@ func TestRouter_POST_ApiShorten_Success(t *testing.T) {
 }
 
 func TestRouter_POST_ApiShorten_InvalidJSON_BadRequest(t *testing.T) {
-	r := routerFromMain("localhost:8080")
+	r := routerFromMain(t, "localhost:8080")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader([]byte("not json")))
 	req.Header.Set("Content-Type", "application/json")
@@ -448,7 +491,7 @@ func TestRouter_POST_ApiShorten_InvalidJSON_BadRequest(t *testing.T) {
 }
 
 func TestRouter_POST_ApiShorten_ThenRedirect(t *testing.T) {
-	r := routerFromMain("localhost:8080")
+	r := routerFromMain(t, "localhost:8080")
 
 	body, _ := json.Marshal(map[string]string{"url": "https://example.com/from-json"})
 	postReq := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
@@ -481,7 +524,7 @@ func TestRouter_POST_ApiShorten_ThenRedirect(t *testing.T) {
 // Тесты Gzip middleware через роутер (как в main).
 
 func TestRouter_Gzip_AcceptEncoding_ReturnsCompressed(t *testing.T) {
-	r := routerFromMain("localhost:8080")
+	r := routerFromMain(t, "localhost:8080")
 
 	body, _ := json.Marshal(map[string]string{"url": "https://example.com/page"})
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
@@ -519,7 +562,7 @@ func TestRouter_Gzip_AcceptEncoding_ReturnsCompressed(t *testing.T) {
 }
 
 func TestRouter_Gzip_NoAcceptEncoding_ReturnsUncompressed(t *testing.T) {
-	r := routerFromMain("localhost:8080")
+	r := routerFromMain(t, "localhost:8080")
 
 	body, _ := json.Marshal(map[string]string{"url": "https://example.com/page"})
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
