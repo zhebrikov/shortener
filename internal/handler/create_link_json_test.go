@@ -28,15 +28,15 @@ func TestCreateLinkJSON_Success(t *testing.T) {
 	if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("CreateLinkJSON: Content-Type = %q, want application/json", ct)
 	}
-	var out Input
+	var out Output
 	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
 		t.Fatalf("CreateLinkJSON: invalid JSON response: %v", err)
 	}
-	if !strings.HasPrefix(out.URL, "http://localhost:8080/") {
-		t.Errorf("CreateLinkJSON: response url %q does not start with base URL", out.URL)
+	if !strings.HasPrefix(out.Result, "http://localhost:8080/") {
+		t.Errorf("CreateLinkJson: response result %q does not start with base URL", out.Result)
 	}
-	if len(out.URL) < len("http://localhost:8080/")+8 {
-		t.Errorf("CreateLinkJSON: short code too short")
+	if len(out.Result) < len("http://localhost:8080/")+8 {
+		t.Errorf("CreateLinkJson: short code too short")
 	}
 }
 
@@ -106,11 +106,11 @@ func TestCreateLinkJSON_EmptyURL_ReturnsShortURL(t *testing.T) {
 	if rr.Code != http.StatusCreated {
 		t.Errorf("CreateLinkJSON empty URL: got status %d, want %d", rr.Code, http.StatusCreated)
 	}
-	var out Input
+	var out Output
 	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
 		t.Fatalf("CreateLinkJSON empty URL: invalid JSON response: %v", err)
 	}
-	if !strings.HasPrefix(out.URL, "http://localhost:8080/") {
-		t.Errorf("CreateLinkJSON empty URL: response url %q does not start with base URL", out.URL)
+	if !strings.HasPrefix(out.Result, "http://localhost:8080/") {
+		t.Errorf("CreateLinkJson empty URL: response result %q does not start with base URL", out.Result)
 	}
 }

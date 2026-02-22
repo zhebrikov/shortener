@@ -314,13 +314,13 @@ func TestMain_POST_ApiShorten_Success(t *testing.T) {
 		t.Errorf("POST /api/shorten: Content-Type = %q, want application/json", ct)
 	}
 	var out struct {
-		URL string `json:"url"`
+		Result string `json:"result"`
 	}
 	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
 		t.Fatalf("POST /api/shorten: invalid JSON response: %v", err)
 	}
-	if !strings.HasPrefix(out.URL, "http://localhost:8080/") {
-		t.Errorf("POST /api/shorten: response url %q does not start with base URL", out.URL)
+	if !strings.HasPrefix(out.Result, "http://localhost:8080/") {
+		t.Errorf("POST /api/shorten: response url %q does not start with base URL", out.Result)
 	}
 }
 
@@ -466,13 +466,13 @@ func TestRouter_POST_ApiShorten_Success(t *testing.T) {
 		t.Errorf("POST /api/shorten: got status %d, want %d", rr.Code, http.StatusCreated)
 	}
 	var out struct {
-		URL string `json:"url"`
+		Result string `json:"result"`
 	}
 	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
 		t.Fatalf("POST /api/shorten: invalid JSON response: %v", err)
 	}
-	if !strings.HasPrefix(out.URL, "http://"+baseURL+"/") {
-		t.Errorf("POST /api/shorten: response url %q does not start with base URL", out.URL)
+	if !strings.HasPrefix(out.Result, "http://"+baseURL+"/") {
+		t.Errorf("POST /api/shorten: response url %q does not start with base URL", out.Result)
 	}
 }
 
@@ -502,12 +502,12 @@ func TestRouter_POST_ApiShorten_ThenRedirect(t *testing.T) {
 		t.Fatalf("POST /api/shorten: got status %d", postRR.Code)
 	}
 	var out struct {
-		URL string `json:"url"`
+		Result string `json:"result"`
 	}
 	if err := json.NewDecoder(postRR.Body).Decode(&out); err != nil {
 		t.Fatalf("POST /api/shorten: invalid JSON: %v", err)
 	}
-	shortCode := out.URL[strings.LastIndex(out.URL, "/")+1:]
+	shortCode := out.Result[strings.LastIndex(out.Result, "/")+1:]
 
 	getReq := httptest.NewRequest(http.MethodGet, "/"+shortCode, nil)
 	getRR := httptest.NewRecorder()

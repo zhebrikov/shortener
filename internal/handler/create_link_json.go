@@ -13,6 +13,10 @@ type Input struct {
 	URL string `json:"url"`
 }
 
+type Output struct {
+	Result string `json:"result"`
+}
+
 func CreateLinkJSON(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -79,8 +83,8 @@ func CreateLinkJSON(
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	result := Input{URL: shortURL}
-	resultJSON, err := json.Marshal(result)
+	result := Output{Result: shortURL}
+	resultJson, err := json.Marshal(result)
 	if err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
