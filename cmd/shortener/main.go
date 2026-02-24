@@ -18,24 +18,24 @@ import (
 )
 
 type Config struct {
-	ServerAddress string `env:"SERVER_ADDRESS"`
-	BaseURL       string `env:"BASE_URL"`
-	FileStorage   string `env:"FILE_STORAGE_PATH"`
+	ServerAddress string
+	BaseURL       string
+	FileStorage   string
 }
 
 // getConfig возвращает serverAddress и baseURL: приоритет у переменных окружения, иначе флаги.
 func getConfig(cfg Config) (Config, error) {
 	serverAddress, ok := os.LookupEnv("SERVER_ADDRESS")
 	if !ok {
-		return Config{}, fmt.Errorf("SERVER_ADDRESS is not set")
+		serverAddress = cfg.ServerAddress
 	}
 	baseURL, ok := os.LookupEnv("BASE_URL")
 	if !ok {
-		return Config{}, fmt.Errorf("BASE_URL is not set")
+		baseURL = cfg.BaseURL
 	}
 	fileStorage, ok := os.LookupEnv("FILE_STORAGE_PATH")
 	if !ok {
-		return Config{}, fmt.Errorf("FILE_STORAGE_PATH is not set")
+		fileStorage = cfg.FileStorage
 	}
 
 	return Config{
