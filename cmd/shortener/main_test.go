@@ -77,7 +77,7 @@ func TestGetConfig(t *testing.T) {
 		FileStorage:   "file.json",
 	}
 
-	t.Run("missing SERVER_ADDRESS returns error", func(t *testing.T) {
+	t.Run("missing SERVER_ADDRESS uses default", func(t *testing.T) {
 		oldAddr, addrOk := saveEnv("SERVER_ADDRESS")
 		oldBase, baseOk := saveEnv("BASE_URL")
 		oldFile, fileOk := saveEnv("FILE_STORAGE_PATH")
@@ -88,16 +88,16 @@ func TestGetConfig(t *testing.T) {
 		defer restoreEnv("BASE_URL", oldBase, baseOk)
 		defer restoreEnv("FILE_STORAGE_PATH", oldFile, fileOk)
 
-		_, err := getConfig(defaultCfg)
-		if err == nil {
-			t.Fatal("getConfig() expected error when SERVER_ADDRESS is not set")
+		got, err := getConfig(defaultCfg)
+		if err != nil {
+			t.Fatalf("getConfig() unexpected error: %v", err)
 		}
-		if !strings.Contains(err.Error(), "SERVER_ADDRESS") {
-			t.Errorf("getConfig() error = %v; want message containing SERVER_ADDRESS", err)
+		if got.ServerAddress != defaultCfg.ServerAddress {
+			t.Errorf("getConfig() ServerAddress = %q; want %q (default)", got.ServerAddress, defaultCfg.ServerAddress)
 		}
 	})
 
-	t.Run("missing BASE_URL returns error", func(t *testing.T) {
+	t.Run("missing BASE_URL uses default", func(t *testing.T) {
 		oldAddr, addrOk := saveEnv("SERVER_ADDRESS")
 		oldBase, baseOk := saveEnv("BASE_URL")
 		oldFile, fileOk := saveEnv("FILE_STORAGE_PATH")
@@ -108,16 +108,16 @@ func TestGetConfig(t *testing.T) {
 		defer restoreEnv("BASE_URL", oldBase, baseOk)
 		defer restoreEnv("FILE_STORAGE_PATH", oldFile, fileOk)
 
-		_, err := getConfig(defaultCfg)
-		if err == nil {
-			t.Fatal("getConfig() expected error when BASE_URL is not set")
+		got, err := getConfig(defaultCfg)
+		if err != nil {
+			t.Fatalf("getConfig() unexpected error: %v", err)
 		}
-		if !strings.Contains(err.Error(), "BASE_URL") {
-			t.Errorf("getConfig() error = %v; want message containing BASE_URL", err)
+		if got.BaseURL != defaultCfg.BaseURL {
+			t.Errorf("getConfig() BaseURL = %q; want %q (default)", got.BaseURL, defaultCfg.BaseURL)
 		}
 	})
 
-	t.Run("missing FILE_STORAGE_PATH returns error", func(t *testing.T) {
+	t.Run("missing FILE_STORAGE_PATH uses default", func(t *testing.T) {
 		oldAddr, addrOk := saveEnv("SERVER_ADDRESS")
 		oldBase, baseOk := saveEnv("BASE_URL")
 		oldFile, fileOk := saveEnv("FILE_STORAGE_PATH")
@@ -128,12 +128,12 @@ func TestGetConfig(t *testing.T) {
 		defer restoreEnv("BASE_URL", oldBase, baseOk)
 		defer restoreEnv("FILE_STORAGE_PATH", oldFile, fileOk)
 
-		_, err := getConfig(defaultCfg)
-		if err == nil {
-			t.Fatal("getConfig() expected error when FILE_STORAGE_PATH is not set")
+		got, err := getConfig(defaultCfg)
+		if err != nil {
+			t.Fatalf("getConfig() unexpected error: %v", err)
 		}
-		if !strings.Contains(err.Error(), "FILE_STORAGE_PATH") {
-			t.Errorf("getConfig() error = %v; want message containing FILE_STORAGE_PATH", err)
+		if got.FileStorage != defaultCfg.FileStorage {
+			t.Errorf("getConfig() FileStorage = %q; want %q (default)", got.FileStorage, defaultCfg.FileStorage)
 		}
 	})
 
