@@ -7,30 +7,17 @@ import (
 	"go.uber.org/zap"
 )
 
-// Log будет доступен всему коду как синглтон.
-// Никакой код навыка, кроме функции Initialize, не должен модифицировать эту переменную.
-// По умолчанию установлен no-op-логер, который не выводит никаких сообщений.
-var Log *zap.Logger = zap.NewNop()
-
-// Initialize инициализирует синглтон логера с необходимым уровнем логирования.
-func Initialize(level string) error {
-	// преобразуем текстовый уровень логирования в zap.AtomicLevel
+// New создаёт логгер с заданным уровнем логирования (например "info", "debug").
+// Логгер нужно передавать явно в компоненты — так зависимости остаются явными,
+// и логгер можно кастомизировать для каждого компонента (например, добавить поле "component").
+func New(level string) (*zap.Logger, error) {
 	lvl, err := zap.ParseAtomicLevel(level)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	// создаём новую конфигурацию логера
 	cfg := zap.NewProductionConfig()
-	// устанавливаем уровень
 	cfg.Level = lvl
-	// создаём логер на основе конфигурации
-	zl, err := cfg.Build()
-	if err != nil {
-		return err
-	}
-	// устанавливаем синглтон
-	Log = zl
-	return nil
+	return cfg.Build()
 }
 
 // responseWriter оборачивает http.ResponseWriter и сохраняет код статуса и размер ответа.
@@ -51,28 +38,31 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// Middleware логирует сведения о запросе (URI, метод, время выполнения) и об ответе (код статуса, размер).
-// Все сообщения на уровне Info.
-func Middleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
-		next.ServeHTTP(wrapped, r)
-		duration := time.Since(start)
-		Log.Info("request completed",
-			zap.String("method", r.Method),
-			zap.String("uri", r.RequestURI),
-			zap.Duration("duration", duration),
-			zap.Int("status", wrapped.statusCode),
-			zap.Int64("size", wrapped.written),
-		)
-	})
+// Middleware возвращает middleware для chi, логирующий запрос (URI, метод, время) и ответ (код, размер).
+// Логгер передаётся явно — зависимость от логгера видна в коде.
+func Middleware(log *zap.Logger) func(next http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+			next.ServeHTTP(wrapped, r)
+			duration := time.Since(start)
+			log.Info("request completed",
+				zap.String("method", r.Method),
+				zap.String("uri", r.RequestURI),
+				zap.Duration("duration", duration),
+				zap.Int("status", wrapped.statusCode),
+				zap.Int64("size", wrapped.written),
+			)
+		})
+	}
 }
 
-// RequestLogger — middleware-логер для входящих HTTP-запросов.
-func RequestLogger(h http.HandlerFunc) http.Handler {
+// RequestLogger возвращает middleware, логирующий входящий запрос на уровне Debug.
+// Логгер передаётся явно.
+func RequestLogger(log *zap.Logger, h http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		Log.Debug("got incoming HTTP request",
+		log.Debug("got incoming HTTP request",
 			zap.String("method", r.Method),
 			zap.String("path", r.URL.Path),
 		)

@@ -9,11 +9,6 @@ import (
 )
 
 func CreateLink(w http.ResponseWriter, r *http.Request, shortener *service.Shortener, store *storage.Storage) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	if r.Header.Get("Content-Type") != "text/plain" {
 		http.Error(w, "Content-Type must be text/plain", http.StatusBadRequest)
 		return
@@ -27,7 +22,11 @@ func CreateLink(w http.ResponseWriter, r *http.Request, shortener *service.Short
 
 	originalURL := string(body)
 
-	shortURL := shortener.CreateLink(originalURL)
+	shortURL, err := shortener.CreateLink(originalURL)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	links, err := store.ReadStorage()
 	if err != nil {

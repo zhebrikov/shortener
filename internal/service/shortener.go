@@ -4,6 +4,8 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
+	"log"
+	"net/url"
 	"strings"
 
 	"github.com/zhebrikov/shortener/internal/storage"
@@ -21,14 +23,24 @@ func NewShortener(baseURL string) *Shortener {
 	}
 }
 
-func (s *Shortener) shortURL(shortCode string) string {
+func (s *Shortener) shortURL(shortCode string) (string, error) {
 	if strings.HasPrefix(s.baseURL, "http://") || strings.HasPrefix(s.baseURL, "https://") {
-		return strings.TrimSuffix(s.baseURL, "/") + "/" + shortCode
+		fullURL, err := url.JoinPath(s.baseURL, shortCode)
+		if err != nil {
+			log.Fatal(err)
+			return "", err
+		}
+		return fullURL, nil
 	}
-	return "http://" + strings.TrimSuffix(s.baseURL, "/") + "/" + shortCode
+
+	fullURL, err := url.JoinPath("http://", s.baseURL, shortCode)
+	if err != nil {
+		return "", err
+	}
+	return fullURL, nil
 }
 
-func (s *Shortener) CreateLink(originalURL string) string {
+func (s *Shortener) CreateLink(originalURL string) (string, error) {
 	for i := 0; ; i++ {
 		input := originalURL
 		if i > 0 {
@@ -40,7 +52,12 @@ func (s *Shortener) CreateLink(originalURL string) string {
 
 		if _, exists := s.repoLink[shortCode]; !exists {
 			s.repoLink[shortCode] = originalURL
-			return s.shortURL(shortCode)
+			shortURL, err := s.shortURL(shortCode)
+			if err != nil {
+				log.Fatal(err)
+				return "", err
+			}
+			return shortURL, nil
 		}
 	}
 }

@@ -23,11 +23,6 @@ func CreateLinkJSON(
 	shortener *service.Shortener,
 	store *storage.Storage,
 ) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -41,7 +36,11 @@ func CreateLinkJSON(
 		return
 	}
 
-	shortURL := shortener.CreateLink(input.URL)
+	shortURL, err := shortener.CreateLink(input.URL)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	links, err := store.ReadStorage()
 	if err != nil {

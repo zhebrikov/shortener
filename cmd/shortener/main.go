@@ -17,21 +17,32 @@ import (
 	"go.uber.org/zap"
 )
 
+type Config struct {
+	ServerAddress string `env:"SERVER_ADDRESS"`
+	BaseURL       string `env:"BASE_URL"`
+	FileStorage   string `env:"FILE_STORAGE_PATH"`
+}
+
 // getConfig возвращает serverAddress и baseURL: приоритет у переменных окружения, иначе флаги.
-func getConfig(serverAddrFlag, baseURLFlag, fileStorageFlag string) (serverAddress, baseURL, fileStorage string) {
-	serverAddress = os.Getenv("SERVER_ADDRESS")
-	if serverAddress == "" {
-		serverAddress = serverAddrFlag
+func getConfig(cfg Config) (Config, error) {
+	serverAddress, ok := os.LookupEnv("SERVER_ADDRESS")
+	if !ok {
+		return Config{}, fmt.Errorf("SERVER_ADDRESS is not set")
 	}
-	baseURL = os.Getenv("BASE_URL")
-	if baseURL == "" {
-		baseURL = baseURLFlag
+	baseURL, ok := os.LookupEnv("BASE_URL")
+	if !ok {
+		return Config{}, fmt.Errorf("BASE_URL is not set")
 	}
-	fileStorage = os.Getenv("FILE_STORAGE_PATH")
-	if fileStorage == "" {
-		fileStorage = fileStorageFlag
+	fileStorage, ok := os.LookupEnv("FILE_STORAGE_PATH")
+	if !ok {
+		return Config{}, fmt.Errorf("FILE_STORAGE_PATH is not set")
 	}
-	return serverAddress, baseURL, fileStorage
+
+	return Config{
+		ServerAddress: serverAddress,
+		BaseURL:       baseURL,
+		FileStorage:   fileStorage,
+	}, nil
 }
 
 // portFromServerAddress возвращает порт из адреса вида "host:port" или ":port".
@@ -49,30 +60,38 @@ func main() {
 	fileStorageFlag := flag.String("f", "file.json", "file to store the links")
 	flag.Parse()
 
-	serverAddress, baseURL, fileStorage := getConfig(*serverAddrFlag, *baseURLFlag, *fileStorageFlag)
-
-	storage := storage.NewStorage(fileStorage)
-
-	port, err := portFromServerAddress(serverAddress)
+	cfg, err := getConfig(Config{
+		ServerAddress: *serverAddrFlag,
+		BaseURL:       *baseURLFlag,
+		FileStorage:   *fileStorageFlag,
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	if err := logger.Initialize("info"); err != nil {
+	storage := storage.NewStorage(cfg.FileStorage)
+
+	port, err := portFromServerAddress(cfg.ServerAddress)
+	if err != nil {
 		log.Fatal(err)
 	}
 
-	shortener := service.NewShortener(baseURL)
+	zapLog, err := logger.New("info")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	shortener := service.NewShortener(cfg.BaseURL)
 	h := handler.NewShortenerHandler(shortener, storage)
 
 	r := chi.NewRouter()
-	r.Use(logger.Middleware)
+	r.Use(logger.Middleware(zapLog))
 	r.Use(middleware.Gzip)
 	r.Post("/", h.CreateLink)
 	r.Get("/{shortCode}", h.GetLink)
 	r.Post("/api/shorten", h.CreateLinkJSON)
 
-	logger.Log.Info("server started", zap.String("address", "http://localhost"+port))
+	zapLog.Info("server started", zap.String("address", "http://localhost"+port))
 
 	err = http.ListenAndServe(port, r)
 	if err != nil {

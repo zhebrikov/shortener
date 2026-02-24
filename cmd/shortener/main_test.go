@@ -17,6 +17,7 @@ import (
 	"github.com/zhebrikov/shortener/internal/middleware"
 	"github.com/zhebrikov/shortener/internal/service"
 	"github.com/zhebrikov/shortener/internal/storage"
+	"go.uber.org/zap"
 )
 
 // storageFromTestFile создаёт временный JSON-файл для тестов storage (пустой массив).
@@ -49,7 +50,7 @@ func routerFromMain(t *testing.T, baseURL string) http.Handler {
 	store := storageFromTestFile(t)
 	h := handler.NewShortenerHandler(shortener, store)
 	r := chi.NewRouter()
-	r.Use(logger.Middleware)
+	r.Use(logger.Middleware(zap.NewNop()))
 	r.Use(middleware.Gzip)
 	r.Post("/", h.CreateLink)
 	r.Get("/{shortCode}", h.GetLink)
@@ -58,10 +59,6 @@ func routerFromMain(t *testing.T, baseURL string) http.Handler {
 }
 
 func TestGetConfig(t *testing.T) {
-	const defaultAddr = "localhost:8080"
-	const defaultBase = "http://example.com"
-	const defaultFile = "file.json"
-
 	saveEnv := func(key string) (string, bool) {
 		v, ok := os.LookupEnv(key)
 		return v, ok
@@ -74,86 +71,95 @@ func TestGetConfig(t *testing.T) {
 		}
 	}
 
-	t.Run("no env uses flags", func(t *testing.T) {
+	defaultCfg := Config{
+		ServerAddress: "localhost:8080",
+		BaseURL:       "http://example.com",
+		FileStorage:   "file.json",
+	}
+
+	t.Run("missing SERVER_ADDRESS returns error", func(t *testing.T) {
 		oldAddr, addrOk := saveEnv("SERVER_ADDRESS")
 		oldBase, baseOk := saveEnv("BASE_URL")
 		oldFile, fileOk := saveEnv("FILE_STORAGE_PATH")
 		os.Unsetenv("SERVER_ADDRESS")
+		os.Setenv("BASE_URL", "http://example.com")
+		os.Setenv("FILE_STORAGE_PATH", "file.json")
+		defer restoreEnv("SERVER_ADDRESS", oldAddr, addrOk)
+		defer restoreEnv("BASE_URL", oldBase, baseOk)
+		defer restoreEnv("FILE_STORAGE_PATH", oldFile, fileOk)
+
+		_, err := getConfig(defaultCfg)
+		if err == nil {
+			t.Fatal("getConfig() expected error when SERVER_ADDRESS is not set")
+		}
+		if !strings.Contains(err.Error(), "SERVER_ADDRESS") {
+			t.Errorf("getConfig() error = %v; want message containing SERVER_ADDRESS", err)
+		}
+	})
+
+	t.Run("missing BASE_URL returns error", func(t *testing.T) {
+		oldAddr, addrOk := saveEnv("SERVER_ADDRESS")
+		oldBase, baseOk := saveEnv("BASE_URL")
+		oldFile, fileOk := saveEnv("FILE_STORAGE_PATH")
+		os.Setenv("SERVER_ADDRESS", "localhost:8080")
 		os.Unsetenv("BASE_URL")
+		os.Setenv("FILE_STORAGE_PATH", "file.json")
+		defer restoreEnv("SERVER_ADDRESS", oldAddr, addrOk)
+		defer restoreEnv("BASE_URL", oldBase, baseOk)
+		defer restoreEnv("FILE_STORAGE_PATH", oldFile, fileOk)
+
+		_, err := getConfig(defaultCfg)
+		if err == nil {
+			t.Fatal("getConfig() expected error when BASE_URL is not set")
+		}
+		if !strings.Contains(err.Error(), "BASE_URL") {
+			t.Errorf("getConfig() error = %v; want message containing BASE_URL", err)
+		}
+	})
+
+	t.Run("missing FILE_STORAGE_PATH returns error", func(t *testing.T) {
+		oldAddr, addrOk := saveEnv("SERVER_ADDRESS")
+		oldBase, baseOk := saveEnv("BASE_URL")
+		oldFile, fileOk := saveEnv("FILE_STORAGE_PATH")
+		os.Setenv("SERVER_ADDRESS", "localhost:8080")
+		os.Setenv("BASE_URL", "http://example.com")
 		os.Unsetenv("FILE_STORAGE_PATH")
 		defer restoreEnv("SERVER_ADDRESS", oldAddr, addrOk)
 		defer restoreEnv("BASE_URL", oldBase, baseOk)
 		defer restoreEnv("FILE_STORAGE_PATH", oldFile, fileOk)
 
-		gotAddr, gotBase, gotFile := getConfig(defaultAddr, defaultBase, defaultFile)
-		if gotAddr != defaultAddr || gotBase != defaultBase || gotFile != defaultFile {
-			t.Errorf("getConfig() = %q, %q, %q; want %q, %q, %q", gotAddr, gotBase, gotFile, defaultAddr, defaultBase, defaultFile)
+		_, err := getConfig(defaultCfg)
+		if err == nil {
+			t.Fatal("getConfig() expected error when FILE_STORAGE_PATH is not set")
+		}
+		if !strings.Contains(err.Error(), "FILE_STORAGE_PATH") {
+			t.Errorf("getConfig() error = %v; want message containing FILE_STORAGE_PATH", err)
 		}
 	})
 
-	t.Run("SERVER_ADDRESS overrides flag", func(t *testing.T) {
+	t.Run("all env set returns config from env", func(t *testing.T) {
 		oldAddr, addrOk := saveEnv("SERVER_ADDRESS")
 		oldBase, baseOk := saveEnv("BASE_URL")
 		oldFile, fileOk := saveEnv("FILE_STORAGE_PATH")
 		os.Setenv("SERVER_ADDRESS", "0.0.0.0:9090")
-		os.Unsetenv("BASE_URL")
-		os.Unsetenv("FILE_STORAGE_PATH")
-		defer restoreEnv("SERVER_ADDRESS", oldAddr, addrOk)
-		defer restoreEnv("BASE_URL", oldBase, baseOk)
-		defer restoreEnv("FILE_STORAGE_PATH", oldFile, fileOk)
-
-		gotAddr, gotBase, gotFile := getConfig(defaultAddr, defaultBase, defaultFile)
-		if gotAddr != "0.0.0.0:9090" {
-			t.Errorf("getConfig() serverAddress = %q; want 0.0.0.0:9090", gotAddr)
-		}
-		if gotBase != defaultBase {
-			t.Errorf("getConfig() baseURL = %q; want %q", gotBase, defaultBase)
-		}
-		if gotFile != defaultFile {
-			t.Errorf("getConfig() fileStorage = %q; want %q", gotFile, defaultFile)
-		}
-	})
-
-	t.Run("BASE_URL overrides flag", func(t *testing.T) {
-		oldAddr, addrOk := saveEnv("SERVER_ADDRESS")
-		oldBase, baseOk := saveEnv("BASE_URL")
-		oldFile, fileOk := saveEnv("FILE_STORAGE_PATH")
-		os.Unsetenv("SERVER_ADDRESS")
 		os.Setenv("BASE_URL", "https://short.example.com")
-		os.Unsetenv("FILE_STORAGE_PATH")
+		os.Setenv("FILE_STORAGE_PATH", "/tmp/links.json")
 		defer restoreEnv("SERVER_ADDRESS", oldAddr, addrOk)
 		defer restoreEnv("BASE_URL", oldBase, baseOk)
 		defer restoreEnv("FILE_STORAGE_PATH", oldFile, fileOk)
 
-		gotAddr, gotBase, gotFile := getConfig(defaultAddr, defaultBase, defaultFile)
-		if gotAddr != defaultAddr {
-			t.Errorf("getConfig() serverAddress = %q; want %q", gotAddr, defaultAddr)
+		got, err := getConfig(defaultCfg)
+		if err != nil {
+			t.Fatalf("getConfig() unexpected error: %v", err)
 		}
-		if gotBase != "https://short.example.com" {
-			t.Errorf("getConfig() baseURL = %q; want https://short.example.com", gotBase)
+		if got.ServerAddress != "0.0.0.0:9090" {
+			t.Errorf("getConfig() ServerAddress = %q; want 0.0.0.0:9090", got.ServerAddress)
 		}
-		if gotFile != defaultFile {
-			t.Errorf("getConfig() fileStorage = %q; want %q", gotFile, defaultFile)
+		if got.BaseURL != "https://short.example.com" {
+			t.Errorf("getConfig() BaseURL = %q; want https://short.example.com", got.BaseURL)
 		}
-	})
-
-	t.Run("both env override flags", func(t *testing.T) {
-		oldAddr, addrOk := saveEnv("SERVER_ADDRESS")
-		oldBase, baseOk := saveEnv("BASE_URL")
-		oldFile, fileOk := saveEnv("FILE_STORAGE_PATH")
-		os.Setenv("SERVER_ADDRESS", ":3000")
-		os.Setenv("BASE_URL", "https://s.example.com")
-		os.Unsetenv("FILE_STORAGE_PATH")
-		defer restoreEnv("SERVER_ADDRESS", oldAddr, addrOk)
-		defer restoreEnv("BASE_URL", oldBase, baseOk)
-		defer restoreEnv("FILE_STORAGE_PATH", oldFile, fileOk)
-
-		gotAddr, gotBase, gotFile := getConfig(defaultAddr, defaultBase, defaultFile)
-		if gotAddr != ":3000" || gotBase != "https://s.example.com" {
-			t.Errorf("getConfig() = %q, %q; want :3000, https://s.example.com", gotAddr, gotBase)
-		}
-		if gotFile != defaultFile {
-			t.Errorf("getConfig() fileStorage = %q; want %q", gotFile, defaultFile)
+		if got.FileStorage != "/tmp/links.json" {
+			t.Errorf("getConfig() FileStorage = %q; want /tmp/links.json", got.FileStorage)
 		}
 	})
 }
@@ -247,13 +253,13 @@ func TestMain_GET_NotFound(t *testing.T) {
 }
 
 func TestMain_MethodNotAllowed(t *testing.T) {
-	h := handlerFromMain(t)
+	r := routerFromMain(t, "localhost:8080")
 
 	methods := []string{http.MethodPut, http.MethodDelete, http.MethodPatch}
 	for _, method := range methods {
 		req := httptest.NewRequest(method, "/", nil)
 		rr := httptest.NewRecorder()
-		h.CreateLink(rr, req)
+		r.ServeHTTP(rr, req)
 		if rr.Code != http.StatusMethodNotAllowed {
 			t.Errorf("%s /: got status %d, want %d", method, rr.Code, http.StatusMethodNotAllowed)
 		}
@@ -339,14 +345,14 @@ func TestMain_POST_ApiShorten_InvalidJSON_BadRequest(t *testing.T) {
 }
 
 func TestMain_POST_ApiShorten_MethodNotAllowed(t *testing.T) {
-	h := handlerFromMain(t)
+	r := routerFromMain(t, "localhost:8080")
 
 	body, _ := json.Marshal(map[string]string{"url": "https://example.com"})
 	req := httptest.NewRequest(http.MethodGet, "/api/shorten", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
-	h.CreateLinkJSON(rr, req)
+	r.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Errorf("GET /api/shorten: got status %d, want %d", rr.Code, http.StatusMethodNotAllowed)

@@ -20,17 +20,7 @@ func NewShortenerHandler(shortener *service.Shortener, storage *storage.Storage)
 }
 
 func (h *ShortenerHandler) CreateLink(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPost {
-		CreateLink(w, r, h.shortener, h.storage)
-		return
-	}
-
-	if r.Method == http.MethodGet {
-		GetLink(w, r, h.shortener, h.storage)
-		return
-	}
-
-	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	CreateLink(w, r, h.shortener, h.storage)
 }
 
 func (h *ShortenerHandler) GetLink(w http.ResponseWriter, r *http.Request) {
