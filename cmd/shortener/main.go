@@ -7,9 +7,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/zhebrikov/shortener/internal/db/postgresql"
 	"github.com/zhebrikov/shortener/internal/handler"
 	"github.com/zhebrikov/shortener/internal/logger"
@@ -88,6 +92,27 @@ func main() {
 		if errConn != nil {
 			log.Fatal(errConn)
 		}
+		// Run migrations so user tables exist (required for iteration11 / DB inspect tests).
+		migrationsPath := os.Getenv("MIGRATIONS_PATH")
+		if migrationsPath == "" {
+			migrationsPath = "migrations"
+			// Fallback when binary is run from cmd/shortener (e.g. go run .)
+			if _, err := os.Stat(migrationsPath); err != nil {
+				migrationsPath = "../migrations"
+			}
+		}
+		if abs, err := filepath.Abs(migrationsPath); err == nil {
+			migrationsPath = abs
+		}
+		m, errMig := migrate.New("file://"+migrationsPath, cfg.DatabaseDsn)
+		if errMig != nil {
+			log.Fatal(errMig)
+		}
+		if errUp := m.Up(); errUp != nil && errUp != migrate.ErrNoChange {
+			_, _ = m.Close()
+			log.Fatal(errUp)
+		}
+		_, _ = m.Close()
 		store = storage.NewPostgresStorage(db)
 	} else if cfg.FileStorage != "" {
 		store = storage.NewStorage(cfg.FileStorage)
