@@ -55,6 +55,7 @@ func routerFromMain(t *testing.T, baseURL string) http.Handler {
 	r.Post("/", h.CreateLink)
 	r.Get("/{shortCode}", h.GetLink)
 	r.Post("/api/shorten", h.CreateLinkJSON)
+	r.Post("/api/shorten/batch", h.CreateLinkBatch)
 	return r
 }
 
@@ -74,7 +75,8 @@ func TestGetConfig(t *testing.T) {
 	defaultCfg := Config{
 		ServerAddress: "localhost:8080",
 		BaseURL:       "http://example.com",
-		FileStorage:   "file.json",
+		FileStorage:   "",
+		DatabaseDsn:   "",
 	}
 
 	t.Run("missing SERVER_ADDRESS uses default", func(t *testing.T) {
@@ -117,7 +119,7 @@ func TestGetConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("missing FILE_STORAGE_PATH uses default", func(t *testing.T) {
+	t.Run("missing FILE_STORAGE_PATH uses default (empty)", func(t *testing.T) {
 		oldAddr, addrOk := saveEnv("SERVER_ADDRESS")
 		oldBase, baseOk := saveEnv("BASE_URL")
 		oldFile, fileOk := saveEnv("FILE_STORAGE_PATH")
@@ -132,8 +134,8 @@ func TestGetConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("getConfig() unexpected error: %v", err)
 		}
-		if got.FileStorage != defaultCfg.FileStorage {
-			t.Errorf("getConfig() FileStorage = %q; want %q (default)", got.FileStorage, defaultCfg.FileStorage)
+		if got.FileStorage != "" {
+			t.Errorf("getConfig() FileStorage = %q; want %q (default)", got.FileStorage, "")
 		}
 	})
 
@@ -141,12 +143,15 @@ func TestGetConfig(t *testing.T) {
 		oldAddr, addrOk := saveEnv("SERVER_ADDRESS")
 		oldBase, baseOk := saveEnv("BASE_URL")
 		oldFile, fileOk := saveEnv("FILE_STORAGE_PATH")
+		oldDsn, dsnOk := saveEnv("DATABASE_DSN")
 		os.Setenv("SERVER_ADDRESS", "0.0.0.0:9090")
 		os.Setenv("BASE_URL", "https://short.example.com")
 		os.Setenv("FILE_STORAGE_PATH", "/tmp/links.json")
+		os.Unsetenv("DATABASE_DSN")
 		defer restoreEnv("SERVER_ADDRESS", oldAddr, addrOk)
 		defer restoreEnv("BASE_URL", oldBase, baseOk)
 		defer restoreEnv("FILE_STORAGE_PATH", oldFile, fileOk)
+		defer restoreEnv("DATABASE_DSN", oldDsn, dsnOk)
 
 		got, err := getConfig(defaultCfg)
 		if err != nil {
@@ -524,6 +529,59 @@ func TestRouter_POST_ApiShorten_ThenRedirect(t *testing.T) {
 	}
 	if loc := getRR.Header().Get("Location"); loc != "https://example.com/from-json" {
 		t.Errorf("GET /%s: Location = %q, want https://example.com/from-json", shortCode, loc)
+	}
+}
+
+func TestRouter_POST_ApiShortenBatch(t *testing.T) {
+	r := routerFromMain(t, "localhost:8080")
+
+	body, _ := json.Marshal([]map[string]string{
+		{"correlation_id": "id1", "original_url": "https://example.com/batch-a"},
+		{"correlation_id": "id2", "original_url": "https://example.com/batch-b"},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/shorten/batch", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Errorf("POST /api/shorten/batch: got status %d, want %d", rr.Code, http.StatusCreated)
+	}
+	var out []struct {
+		CorrelationID string `json:"correlation_id"`
+		ShortURL      string `json:"short_url"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("POST /api/shorten/batch: invalid JSON: %v", err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("POST /api/shorten/batch: len(response) = %d, want 2", len(out))
+	}
+	if out[0].CorrelationID != "id1" || out[1].CorrelationID != "id2" {
+		t.Errorf("correlation_id: got %q, %q", out[0].CorrelationID, out[1].CorrelationID)
+	}
+	for i := range out {
+		if !strings.HasPrefix(out[i].ShortURL, "http://localhost:8080/") {
+			t.Errorf("short_url[%d] = %q, want prefix http://localhost:8080/", i, out[i].ShortURL)
+		}
+	}
+	shortCode := out[0].ShortURL[strings.LastIndex(out[0].ShortURL, "/")+1:]
+	getReq := httptest.NewRequest(http.MethodGet, "/"+shortCode, nil)
+	getRR := httptest.NewRecorder()
+	r.ServeHTTP(getRR, getReq)
+	if getRR.Code != http.StatusTemporaryRedirect || getRR.Header().Get("Location") != "https://example.com/batch-a" {
+		t.Errorf("GET /%s: code=%d location=%q", shortCode, getRR.Code, getRR.Header().Get("Location"))
+	}
+}
+
+func TestRouter_POST_ApiShortenBatch_EmptyRejected(t *testing.T) {
+	r := routerFromMain(t, "localhost:8080")
+	req := httptest.NewRequest(http.MethodPost, "/api/shorten/batch", bytes.NewReader([]byte("[]")))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("POST /api/shorten/batch empty: got status %d, want %d", rr.Code, http.StatusBadRequest)
 	}
 }
 

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"io"
 	"net/http"
 
@@ -8,7 +9,7 @@ import (
 	"github.com/zhebrikov/shortener/internal/storage"
 )
 
-func CreateLink(w http.ResponseWriter, r *http.Request, shortener *service.Shortener, store *storage.Storage) {
+func CreateLink(w http.ResponseWriter, r *http.Request, shortener *service.Shortener, store storage.LinkStore) {
 	if r.Header.Get("Content-Type") != "text/plain" {
 		http.Error(w, "Content-Type must be text/plain", http.StatusBadRequest)
 		return
@@ -34,15 +35,6 @@ func CreateLink(w http.ResponseWriter, r *http.Request, shortener *service.Short
 		return
 	}
 
-	for _, link := range links {
-		if link.OriginalURL == originalURL {
-			w.Header().Set("Content-Type", "text/plain")
-			w.WriteHeader(http.StatusConflict)
-			w.Write([]byte(link.ShortURL))
-			return
-		}
-	}
-
 	var lastLinkUUID int
 	if len(links) == 0 {
 		lastLinkUUID = 0
@@ -57,6 +49,17 @@ func CreateLink(w http.ResponseWriter, r *http.Request, shortener *service.Short
 	}
 
 	if err := store.WriteStorage(newRecord); err != nil {
+		if errors.Is(err, storage.ErrDuplicateURL) {
+			existingShort, getErr := store.GetShortURLByOriginalURL(originalURL)
+			if getErr != nil {
+				http.Error(w, "Failed to get existing short URL", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(existingShort))
+			return
+		}
 		http.Error(w, "Failed to write storage", http.StatusInternalServerError)
 		return
 	}

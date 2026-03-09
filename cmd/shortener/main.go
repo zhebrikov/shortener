@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"flag"
 	"fmt"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/zhebrikov/shortener/internal/db/postgresql"
 	"github.com/zhebrikov/shortener/internal/handler"
 	"github.com/zhebrikov/shortener/internal/logger"
 	"github.com/zhebrikov/shortener/internal/middleware"
@@ -21,6 +23,7 @@ type Config struct {
 	ServerAddress string
 	BaseURL       string
 	FileStorage   string
+	DatabaseDsn   string
 }
 
 // getConfig возвращает конфиг: переменные окружения имеют приоритет, иначе используются значения по умолчанию (defaults).
@@ -37,10 +40,16 @@ func getConfig(defaults Config) (Config, error) {
 	if !ok || fileStorage == "" {
 		fileStorage = defaults.FileStorage
 	}
+	databaseDsn, ok := os.LookupEnv("DATABASE_DSN")
+	if !ok || databaseDsn == "" {
+		databaseDsn = defaults.DatabaseDsn
+	}
+
 	return Config{
 		ServerAddress: serverAddress,
 		BaseURL:       baseURL,
 		FileStorage:   fileStorage,
+		DatabaseDsn:   databaseDsn,
 	}, nil
 }
 
@@ -56,19 +65,35 @@ func portFromServerAddress(serverAddress string) (string, error) {
 func main() {
 	serverAddrFlag := flag.String("a", "localhost:8080", "address of the HTTP server")
 	baseURLFlag := flag.String("b", "localhost:8080", "base URL for shortened links")
-	fileStorageFlag := flag.String("f", "file.json", "file to store the links")
+	fileStorageFlag := flag.String("f", "", "file to store the links (empty = in-memory when no DB)")
+	databaseDsnFlag := flag.String("d", "", "database DSN")
 	flag.Parse()
 
 	cfg, err := getConfig(Config{
 		ServerAddress: *serverAddrFlag,
 		BaseURL:       *baseURLFlag,
 		FileStorage:   *fileStorageFlag,
+		DatabaseDsn:   *databaseDsnFlag,
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	storage := storage.NewStorage(cfg.FileStorage)
+	// Выбор хранилища: DATABASE_DSN/-d → файл (FILE_STORAGE_PATH/-f) → память.
+	var store storage.LinkStore
+	var db *sql.DB
+	if cfg.DatabaseDsn != "" {
+		var errConn error
+		db, errConn = postgresql.Connection(cfg.DatabaseDsn)
+		if errConn != nil {
+			log.Fatal(errConn)
+		}
+		store = storage.NewPostgresStorage(db)
+	} else if cfg.FileStorage != "" {
+		store = storage.NewStorage(cfg.FileStorage)
+	} else {
+		store = storage.NewMemoryStorage()
+	}
 
 	port, err := portFromServerAddress(cfg.ServerAddress)
 	if err != nil {
@@ -81,7 +106,7 @@ func main() {
 	}
 
 	shortener := service.NewShortener(cfg.BaseURL)
-	h := handler.NewShortenerHandler(shortener, storage)
+	h := handler.NewShortenerHandler(shortener, store)
 
 	r := chi.NewRouter()
 	r.Use(logger.Middleware(zapLog))
@@ -89,6 +114,8 @@ func main() {
 	r.Post("/", h.CreateLink)
 	r.Get("/{shortCode}", h.GetLink)
 	r.Post("/api/shorten", h.CreateLinkJSON)
+	r.Get("/ping", handler.HealthCheck(db))
+	r.Post("/api/shorten/batch", h.CreateLinkBatch)
 
 	zapLog.Info("server started", zap.String("address", "http://localhost"+port))
 

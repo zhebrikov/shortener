@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 
@@ -21,7 +22,7 @@ func CreateLinkJSON(
 	w http.ResponseWriter,
 	r *http.Request,
 	shortener *service.Shortener,
-	store *storage.Storage,
+	store storage.LinkStore,
 ) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -47,20 +48,6 @@ func CreateLinkJSON(
 		http.Error(w, "Failed to read storage", http.StatusInternalServerError)
 		return
 	}
-	for _, link := range links {
-		if link.OriginalURL == input.URL {
-			w.Header().Set("Content-Type", "application/json")
-			result := Input{URL: link.ShortURL}
-			resultJSON, err := json.Marshal(result)
-			if err != nil {
-				http.Error(w, "Invalid request body", http.StatusBadRequest)
-				return
-			}
-			w.WriteHeader(http.StatusCreated)
-			w.Write(resultJSON)
-			return
-		}
-	}
 
 	var lastLinkUUID int
 	if len(links) == 0 {
@@ -77,6 +64,18 @@ func CreateLinkJSON(
 
 	err = store.WriteStorage(newRecord)
 	if err != nil {
+		if errors.Is(err, storage.ErrDuplicateURL) {
+			existingShort, getErr := store.GetShortURLByOriginalURL(input.URL)
+			if getErr != nil {
+				http.Error(w, "Failed to get existing short URL", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			resultJSON, _ := json.Marshal(Output{Result: existingShort})
+			w.Write(resultJSON)
+			return
+		}
 		http.Error(w, "Failed to write storage", http.StatusInternalServerError)
 		return
 	}
