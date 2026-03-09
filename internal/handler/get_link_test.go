@@ -9,62 +9,80 @@ import (
 	"github.com/zhebrikov/shortener/internal/service"
 )
 
-func TestGetLink_RedirectWhenFound(t *testing.T) {
+func TestGetLink(t *testing.T) {
 	shortener := service.NewShortener("localhost:8080")
-
-	// Создаём ссылку через сервис напрямую
-	originalURL := "https://example.com/redirect-target"
-	shortURL := shortener.CreateLink(originalURL)
+	originalURL := "https://example.com/target"
+	shortURL, _ := shortener.CreateLink(originalURL)
 	shortCode := shortURL[strings.LastIndex(shortURL, "/")+1:]
 
-	req := httptest.NewRequest(http.MethodGet, "/"+shortCode, nil)
-	rr := httptest.NewRecorder()
-	GetLink(rr, req, shortener)
-
-	if rr.Code != http.StatusTemporaryRedirect {
-		t.Errorf("GetLink: got status %d, want %d", rr.Code, http.StatusTemporaryRedirect)
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		storage    string
+		wantStatus int
+		wantLoc    string
+	}{
+		{
+			name:       "найден — 307 и Location",
+			method:     http.MethodGet,
+			path:       "/" + shortCode,
+			storage:    `[{"uuid":1,"short_url":"` + shortCode + `","original_url":"` + originalURL + `"}]`,
+			wantStatus: http.StatusTemporaryRedirect,
+			wantLoc:    originalURL,
+		},
+		{
+			name:       "не найден — 404",
+			method:     http.MethodGet,
+			path:       "/nonexistent123",
+			storage:    "[]",
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:       "корень / — 404",
+			method:     http.MethodGet,
+			path:       "/",
+			storage:    "[]",
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:       "POST — 405",
+			method:     http.MethodPost,
+			path:       "/" + shortCode,
+			storage:    "[]",
+			wantStatus: http.StatusMethodNotAllowed,
+		},
+		{
+			name:       "PUT — 405",
+			method:     http.MethodPut,
+			path:       "/" + shortCode,
+			storage:    "[]",
+			wantStatus: http.StatusMethodNotAllowed,
+		},
+		{
+			name:       "DELETE — 405",
+			method:     http.MethodDelete,
+			path:       "/" + shortCode,
+			storage:    "[]",
+			wantStatus: http.StatusMethodNotAllowed,
+		},
 	}
-	if loc := rr.Header().Get("Location"); loc != originalURL {
-		t.Errorf("GetLink: Location = %q, want %q", loc, originalURL)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := mustTempStorage(t, tt.storage)
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			rr := httptest.NewRecorder()
 
-func TestGetLink_NotFound(t *testing.T) {
-	shortener := service.NewShortener("localhost:8080")
+			GetLink(rr, req, shortener, store)
 
-	req := httptest.NewRequest(http.MethodGet, "/nonexistent123", nil)
-	rr := httptest.NewRecorder()
-	GetLink(rr, req, shortener)
-
-	if rr.Code != http.StatusNotFound {
-		t.Errorf("GetLink: got status %d, want %d", rr.Code, http.StatusNotFound)
-	}
-}
-
-func TestGetLink_RootPath_NotFound(t *testing.T) {
-	shortener := service.NewShortener("localhost:8080")
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	rr := httptest.NewRecorder()
-	GetLink(rr, req, shortener)
-
-	if rr.Code != http.StatusNotFound {
-		t.Errorf("GetLink GET /: got status %d, want %d", rr.Code, http.StatusNotFound)
-	}
-}
-
-func TestGetLink_MethodNotAllowed(t *testing.T) {
-	shortener := service.NewShortener("localhost:8080")
-	shortener.CreateLink("https://example.com")
-	shortURL := shortener.CreateLink("https://example.com")
-	shortCode := shortURL[strings.LastIndex(shortURL, "/")+1:]
-
-	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
-		req := httptest.NewRequest(method, "/"+shortCode, nil)
-		rr := httptest.NewRecorder()
-		GetLink(rr, req, shortener)
-		if rr.Code != http.StatusMethodNotAllowed {
-			t.Errorf("GetLink %s: got status %d, want %d", method, rr.Code, http.StatusMethodNotAllowed)
-		}
+			if rr.Code != tt.wantStatus {
+				t.Errorf("GetLink: статус = %d, ожидалось %d", rr.Code, tt.wantStatus)
+			}
+			if tt.wantLoc != "" {
+				if loc := rr.Header().Get("Location"); loc != tt.wantLoc {
+					t.Errorf("GetLink: Location = %q, ожидалось %q", loc, tt.wantLoc)
+				}
+			}
+		})
 	}
 }

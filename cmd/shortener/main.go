@@ -5,35 +5,94 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/zhebrikov/shortener/internal/handler"
+	"github.com/zhebrikov/shortener/internal/logger"
+	"github.com/zhebrikov/shortener/internal/middleware"
 	"github.com/zhebrikov/shortener/internal/service"
+	"github.com/zhebrikov/shortener/internal/storage"
+	"go.uber.org/zap"
 )
 
-func main() {
+type Config struct {
+	ServerAddress string
+	BaseURL       string
+	FileStorage   string
+}
 
-	url := flag.String("a", "localhost:8080", "url of the server")
+// getConfig возвращает конфиг: переменные окружения имеют приоритет, иначе используются значения по умолчанию (defaults).
+func getConfig(defaults Config) (Config, error) {
+	serverAddress, ok := os.LookupEnv("SERVER_ADDRESS")
+	if !ok || serverAddress == "" {
+		serverAddress = defaults.ServerAddress
+	}
+	baseURL, ok := os.LookupEnv("BASE_URL")
+	if !ok || baseURL == "" {
+		baseURL = defaults.BaseURL
+	}
+	fileStorage, ok := os.LookupEnv("FILE_STORAGE_PATH")
+	if !ok || fileStorage == "" {
+		fileStorage = defaults.FileStorage
+	}
+	return Config{
+		ServerAddress: serverAddress,
+		BaseURL:       baseURL,
+		FileStorage:   fileStorage,
+	}, nil
+}
+
+// portFromServerAddress возвращает порт из адреса вида "host:port" или ":port".
+func portFromServerAddress(serverAddress string) (string, error) {
+	idx := strings.Index(serverAddress, ":")
+	if idx == -1 {
+		return "", fmt.Errorf("server address must contain port")
+	}
+	return serverAddress[idx:], nil
+}
+
+func main() {
+	serverAddrFlag := flag.String("a", "localhost:8080", "address of the HTTP server")
+	baseURLFlag := flag.String("b", "localhost:8080", "base URL for shortened links")
+	fileStorageFlag := flag.String("f", "file.json", "file to store the links")
 	flag.Parse()
 
-	shortener := service.NewShortener(*url)
-	handler := handler.NewShortenerHandler(shortener)
-
-	r := chi.NewRouter()
-	r.Post("/", handler.CreateLink)
-	r.Get("/{shortCode}", handler.GetLink)
-
-	idx := strings.Index(*url, ":")
-	if idx == -1 {
-		panic("url must contain port")
+	cfg, err := getConfig(Config{
+		ServerAddress: *serverAddrFlag,
+		BaseURL:       *baseURLFlag,
+		FileStorage:   *fileStorageFlag,
+	})
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	port := (*url)[idx:]
-	fmt.Println(port)
-	fmt.Println("Сервер запущен на http://localhost" + port)
+	storage := storage.NewStorage(cfg.FileStorage)
 
-	err := http.ListenAndServe(port, r)
+	port, err := portFromServerAddress(cfg.ServerAddress)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	zapLog, err := logger.New("info")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	shortener := service.NewShortener(cfg.BaseURL)
+	h := handler.NewShortenerHandler(shortener, storage)
+
+	r := chi.NewRouter()
+	r.Use(logger.Middleware(zapLog))
+	r.Use(middleware.Gzip)
+	r.Post("/", h.CreateLink)
+	r.Get("/{shortCode}", h.GetLink)
+	r.Post("/api/shorten", h.CreateLinkJSON)
+
+	zapLog.Info("server started", zap.String("address", "http://localhost"+port))
+
+	err = http.ListenAndServe(port, r)
 	if err != nil {
 		log.Fatal(err)
 	}

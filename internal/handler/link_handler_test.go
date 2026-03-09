@@ -10,112 +10,132 @@ import (
 	"github.com/zhebrikov/shortener/internal/service"
 )
 
-func TestShortenerHandler_CreateLink_POST_Success(t *testing.T) {
-	shortener := service.NewShortener("localhost:8080")
-	h := NewShortenerHandler(shortener)
-
-	body := []byte("https://example.com/page")
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "text/plain")
-	rr := httptest.NewRecorder()
-
-	h.CreateLink(rr, req)
-
-	if rr.Code != http.StatusCreated {
-		t.Errorf("ShortenerHandler.CreateLink POST: got status %d, want %d", rr.Code, http.StatusCreated)
-	}
-	respBody := strings.TrimSpace(rr.Body.String())
-	if !strings.HasPrefix(respBody, "http://localhost:8080/") {
-		t.Errorf("ShortenerHandler.CreateLink POST: response %q does not start with base URL", respBody)
-	}
-}
-
-func TestShortenerHandler_CreateLink_GET_Redirect(t *testing.T) {
-	shortener := service.NewShortener("localhost:8080")
-	h := NewShortenerHandler(shortener)
-
-	originalURL := "https://example.com/target"
-	shortURL := shortener.CreateLink(originalURL)
-	shortCode := shortURL[strings.LastIndex(shortURL, "/")+1:]
-
-	req := httptest.NewRequest(http.MethodGet, "/"+shortCode, nil)
-	rr := httptest.NewRecorder()
-	h.CreateLink(rr, req)
-
-	if rr.Code != http.StatusTemporaryRedirect {
-		t.Errorf("ShortenerHandler.CreateLink GET: got status %d, want %d", rr.Code, http.StatusTemporaryRedirect)
-	}
-	if loc := rr.Header().Get("Location"); loc != originalURL {
-		t.Errorf("ShortenerHandler.CreateLink GET: Location = %q, want %q", loc, originalURL)
-	}
-}
-
-func TestShortenerHandler_CreateLink_GET_NotFound(t *testing.T) {
-	shortener := service.NewShortener("localhost:8080")
-	h := NewShortenerHandler(shortener)
-
-	req := httptest.NewRequest(http.MethodGet, "/nonexistent", nil)
-	rr := httptest.NewRecorder()
-	h.CreateLink(rr, req)
-
-	if rr.Code != http.StatusNotFound {
-		t.Errorf("ShortenerHandler.CreateLink GET: got status %d, want %d", rr.Code, http.StatusNotFound)
-	}
-}
-
-func TestShortenerHandler_CreateLink_MethodNotAllowed(t *testing.T) {
-	shortener := service.NewShortener("localhost:8080")
-	h := NewShortenerHandler(shortener)
-
-	req := httptest.NewRequest(http.MethodPut, "/", nil)
-	rr := httptest.NewRecorder()
-	h.CreateLink(rr, req)
-
-	if rr.Code != http.StatusMethodNotAllowed {
-		t.Errorf("ShortenerHandler.CreateLink PUT: got status %d, want %d", rr.Code, http.StatusMethodNotAllowed)
-	}
-}
-
-func TestShortenerHandler_GetLink_Redirect(t *testing.T) {
-	shortener := service.NewShortener("localhost:8080")
-	h := NewShortenerHandler(shortener)
-
-	originalURL := "https://example.com/redirect"
-	shortURL := shortener.CreateLink(originalURL)
-	shortCode := shortURL[strings.LastIndex(shortURL, "/")+1:]
-
-	req := httptest.NewRequest(http.MethodGet, "/"+shortCode, nil)
-	rr := httptest.NewRecorder()
-	h.GetLink(rr, req)
-
-	if rr.Code != http.StatusTemporaryRedirect {
-		t.Errorf("ShortenerHandler.GetLink: got status %d, want %d", rr.Code, http.StatusTemporaryRedirect)
-	}
-	if loc := rr.Header().Get("Location"); loc != originalURL {
-		t.Errorf("ShortenerHandler.GetLink: Location = %q, want %q", loc, originalURL)
-	}
-}
-
-func TestShortenerHandler_GetLink_NotFound(t *testing.T) {
-	shortener := service.NewShortener("localhost:8080")
-	h := NewShortenerHandler(shortener)
-
-	req := httptest.NewRequest(http.MethodGet, "/unknown", nil)
-	rr := httptest.NewRecorder()
-	h.GetLink(rr, req)
-
-	if rr.Code != http.StatusNotFound {
-		t.Errorf("ShortenerHandler.GetLink: got status %d, want %d", rr.Code, http.StatusNotFound)
-	}
-}
-
 func TestNewShortenerHandler(t *testing.T) {
 	shortener := service.NewShortener("test:9090")
-	h := NewShortenerHandler(shortener)
+	store := mustTempStorage(t, "[]")
+	h := NewShortenerHandler(shortener, store)
 	if h == nil {
 		t.Fatal("NewShortenerHandler returned nil")
 	}
-	if h.shortener != shortener {
-		t.Error("NewShortenerHandler: shortener not set correctly")
+}
+
+func TestShortenerHandler_CreateLink(t *testing.T) {
+	baseURL := "localhost:8080"
+	shortener := service.NewShortener(baseURL)
+
+	tests := []struct {
+		name           string
+		method         string
+		body           []byte
+		contentType    string
+		storage        string
+		wantStatus     int
+		wantBodyPrefix string
+	}{
+		{
+			name:           "POST с телом и text/plain — 201, возвращает короткую ссылку",
+			method:         http.MethodPost,
+			body:           []byte("https://example.com/page"),
+			contentType:    "text/plain",
+			storage:        "[]",
+			wantStatus:     http.StatusCreated,
+			wantBodyPrefix: "http://" + baseURL + "/",
+		},
+		{
+			name:        "POST без Content-Type — 400",
+			method:      http.MethodPost,
+			body:        []byte("https://example.com"),
+			storage:     "[]",
+			wantStatus:  http.StatusBadRequest,
+		},
+		{
+			name:        "POST с пустым телом — 400",
+			method:      http.MethodPost,
+			body:        nil,
+			contentType: "text/plain",
+			storage:     "[]",
+			wantStatus:  http.StatusBadRequest,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := mustTempStorage(t, tt.storage)
+			h := NewShortenerHandler(shortener, store)
+			req := httptest.NewRequest(tt.method, "/", bytes.NewReader(tt.body))
+			if tt.contentType != "" {
+				req.Header.Set("Content-Type", tt.contentType)
+			}
+			rr := httptest.NewRecorder()
+
+			h.CreateLink(rr, req)
+
+			if rr.Code != tt.wantStatus {
+				t.Errorf("CreateLink: статус = %d, ожидалось %d", rr.Code, tt.wantStatus)
+			}
+			if tt.wantBodyPrefix != "" {
+				respBody := strings.TrimSpace(rr.Body.String())
+				if !strings.HasPrefix(respBody, tt.wantBodyPrefix) {
+					t.Errorf("CreateLink: ответ %q не начинается с %q", respBody, tt.wantBodyPrefix)
+				}
+			}
+		})
+	}
+}
+
+func TestShortenerHandler_GetLink(t *testing.T) {
+	shortener := service.NewShortener("localhost:8080")
+	originalURL := "https://example.com/redirect"
+	shortURL, _ := shortener.CreateLink(originalURL)
+	shortCode := shortURL[strings.LastIndex(shortURL, "/")+1:]
+
+	tests := []struct {
+		name        string
+		method      string
+		path        string
+		storage     string
+		wantStatus  int
+		wantLoc     string
+	}{
+		{
+			name:       "GET по существующему коду — 307 и Location",
+			method:     http.MethodGet,
+			path:       "/" + shortCode,
+			storage:    `[{"uuid":1,"short_url":"` + shortCode + `","original_url":"` + originalURL + `"}]`,
+			wantStatus: http.StatusTemporaryRedirect,
+			wantLoc:    originalURL,
+		},
+		{
+			name:       "GET по неизвестному коду — 404",
+			method:     http.MethodGet,
+			path:       "/nonexistent",
+			storage:    "[]",
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:       "POST по коду — 405",
+			method:     http.MethodPost,
+			path:       "/" + shortCode,
+			storage:    "[]",
+			wantStatus: http.StatusMethodNotAllowed,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := mustTempStorage(t, tt.storage)
+			h := NewShortenerHandler(shortener, store)
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			rr := httptest.NewRecorder()
+
+			h.GetLink(rr, req)
+
+			if rr.Code != tt.wantStatus {
+				t.Errorf("GetLink: статус = %d, ожидалось %d", rr.Code, tt.wantStatus)
+			}
+			if tt.wantLoc != "" {
+				if loc := rr.Header().Get("Location"); loc != tt.wantLoc {
+					t.Errorf("GetLink: Location = %q, ожидалось %q", loc, tt.wantLoc)
+				}
+			}
+		})
 	}
 }
