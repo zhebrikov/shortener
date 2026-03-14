@@ -28,6 +28,7 @@ type Config struct {
 	BaseURL       string
 	FileStorage   string
 	DatabaseDsn   string
+	MigrationPath string
 }
 
 // getConfig возвращает конфиг: переменные окружения имеют приоритет, иначе используются значения по умолчанию (defaults).
@@ -48,12 +49,16 @@ func getConfig(defaults Config) (Config, error) {
 	if !ok || databaseDsn == "" {
 		databaseDsn = defaults.DatabaseDsn
 	}
-
+	migrationPath, ok := os.LookupEnv("MIGRATIONS_PATH")
+	if !ok || migrationPath == "" {
+		migrationPath = defaults.MigrationPath
+	}
 	return Config{
 		ServerAddress: serverAddress,
 		BaseURL:       baseURL,
 		FileStorage:   fileStorage,
 		DatabaseDsn:   databaseDsn,
+		MigrationPath: migrationPath,
 	}, nil
 }
 
@@ -71,6 +76,7 @@ func main() {
 	baseURLFlag := flag.String("b", "localhost:8080", "base URL for shortened links")
 	fileStorageFlag := flag.String("f", "", "file to store the links (empty = in-memory when no DB)")
 	databaseDsnFlag := flag.String("d", "", "database DSN")
+	migrationPathFlag := flag.String("m", "migrations", "path to the migrations")
 	flag.Parse()
 
 	cfg, err := getConfig(Config{
@@ -78,6 +84,7 @@ func main() {
 		BaseURL:       *baseURLFlag,
 		FileStorage:   *fileStorageFlag,
 		DatabaseDsn:   *databaseDsnFlag,
+		MigrationPath: *migrationPathFlag,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -93,20 +100,23 @@ func main() {
 			log.Fatal(errConn)
 		}
 		// Run migrations so user tables exist (required for iteration11 / DB inspect tests).
-		migrationsPath := os.Getenv("MIGRATIONS_PATH")
+		migrationsPath := cfg.MigrationPath
 		if migrationsPath == "" {
 			migrationsPath = "migrations"
-			// Fallback when binary is run from cmd/shortener (e.g. go run .)
-			if _, err := os.Stat(migrationsPath); err != nil {
-				migrationsPath = "../migrations"
-			}
 		}
 		if abs, err := filepath.Abs(migrationsPath); err == nil {
 			migrationsPath = abs
 		}
 		m, errMig := migrate.New("file://"+migrationsPath, cfg.DatabaseDsn)
 		if errMig != nil {
-			log.Fatal(errMig)
+			migrationsPath = "../migrations"
+			if abs, err := filepath.Abs(migrationsPath); err == nil {
+				migrationsPath = abs
+			}
+			m, errMig = migrate.New("file://"+migrationsPath, cfg.DatabaseDsn)
+			if errMig != nil {
+				log.Fatal(errMig)
+			}
 		}
 		if errUp := m.Up(); errUp != nil && errUp != migrate.ErrNoChange {
 			_, _ = m.Close()

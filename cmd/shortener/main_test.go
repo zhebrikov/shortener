@@ -311,7 +311,10 @@ func TestMain_GET_RootPath_NotFound(t *testing.T) {
 func TestMain_POST_ApiShorten_Success(t *testing.T) {
 	h := handlerFromMain(t)
 
-	body, _ := json.Marshal(map[string]string{"url": "https://example.com/page"})
+	body, err := json.Marshal(map[string]string{"url": "https://example.com/page"})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -352,7 +355,10 @@ func TestMain_POST_ApiShorten_InvalidJSON_BadRequest(t *testing.T) {
 func TestMain_POST_ApiShorten_MethodNotAllowed(t *testing.T) {
 	r := routerFromMain(t, "localhost:8080")
 
-	body, _ := json.Marshal(map[string]string{"url": "https://example.com"})
+	body, err := json.Marshal(map[string]string{"url": "https://example.com"})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodGet, "/api/shorten", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -466,7 +472,10 @@ func TestRouter_POST_ApiShorten_Success(t *testing.T) {
 	baseURL := "localhost:8080"
 	r := routerFromMain(t, baseURL)
 
-	body, _ := json.Marshal(map[string]string{"url": "https://example.com/page"})
+	body, err := json.Marshal(map[string]string{"url": "https://example.com/page"})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -504,7 +513,10 @@ func TestRouter_POST_ApiShorten_InvalidJSON_BadRequest(t *testing.T) {
 func TestRouter_POST_ApiShorten_ThenRedirect(t *testing.T) {
 	r := routerFromMain(t, "localhost:8080")
 
-	body, _ := json.Marshal(map[string]string{"url": "https://example.com/from-json"})
+	body, err := json.Marshal(map[string]string{"url": "https://example.com/from-json"})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
 	postReq := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
 	postReq.Header.Set("Content-Type", "application/json")
 	postRR := httptest.NewRecorder()
@@ -535,10 +547,13 @@ func TestRouter_POST_ApiShorten_ThenRedirect(t *testing.T) {
 func TestRouter_POST_ApiShortenBatch(t *testing.T) {
 	r := routerFromMain(t, "localhost:8080")
 
-	body, _ := json.Marshal([]map[string]string{
+	body, err := json.Marshal([]map[string]string{
 		{"correlation_id": "id1", "original_url": "https://example.com/batch-a"},
 		{"correlation_id": "id2", "original_url": "https://example.com/batch-b"},
 	})
+	if err != nil {
+		t.Fatalf("marshal batch body: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten/batch", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -590,7 +605,10 @@ func TestRouter_POST_ApiShortenBatch_EmptyRejected(t *testing.T) {
 func TestRouter_Gzip_AcceptEncoding_ReturnsCompressed(t *testing.T) {
 	r := routerFromMain(t, "localhost:8080")
 
-	body, _ := json.Marshal(map[string]string{"url": "https://example.com/page"})
+	body, err := json.Marshal(map[string]string{"url": "https://example.com/page"})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept-Encoding", "gzip")
@@ -628,7 +646,10 @@ func TestRouter_Gzip_AcceptEncoding_ReturnsCompressed(t *testing.T) {
 func TestRouter_Gzip_NoAcceptEncoding_ReturnsUncompressed(t *testing.T) {
 	r := routerFromMain(t, "localhost:8080")
 
-	body, _ := json.Marshal(map[string]string{"url": "https://example.com/page"})
+	body, err := json.Marshal(map[string]string{"url": "https://example.com/page"})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()

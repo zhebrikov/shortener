@@ -3,6 +3,8 @@ package storage
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/jackc/pgerrcode"
 	"github.com/lib/pq"
@@ -63,10 +65,9 @@ func (p *PostgresStorage) GetShortURLByOriginalURL(originalURL string) (string, 
 
 func (p *PostgresStorage) WriteStorage(link Link) error {
 	_, err := p.db.Exec(
-		"INSERT INTO links (url, short_url, str_id) VALUES ($1, $2, $3)",
+		"INSERT INTO links (url, short_url) VALUES ($1, $2)",
 		link.OriginalURL,
 		link.ShortURL,
-		link.CorrelationID,
 	)
 	if err != nil {
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == pgerrcode.UniqueViolation {
@@ -77,26 +78,24 @@ func (p *PostgresStorage) WriteStorage(link Link) error {
 	return nil
 }
 
-// WriteStorageBatch вставляет все ссылки в одной транзакции.
+// WriteStorageBatch вставляет все ссылки одним запросом (один roundtrip к БД).
 func (p *PostgresStorage) WriteStorageBatch(links []Link) error {
 	if len(links) == 0 {
 		return nil
 	}
-	tx, err := p.db.Begin()
+	valueStrings := make([]string, 0, len(links))
+	valueArgs := make([]interface{}, 0, len(links)*2)
+	for i, link := range links {
+		valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d)", i*2+1, i*2+2))
+		valueArgs = append(valueArgs, link.OriginalURL, link.ShortURL)
+	}
+	stmt := "INSERT INTO links (url, short_url) VALUES " + strings.Join(valueStrings, ",")
+	_, err := p.db.Exec(stmt, valueArgs...)
 	if err != nil {
+		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == pgerrcode.UniqueViolation {
+			return ErrDuplicateURL
+		}
 		return err
 	}
-	defer tx.Rollback()
-	for _, link := range links {
-		_, err := tx.Exec(
-			"INSERT INTO links (url, short_url, str_id) VALUES ($1, $2, $3)",
-			link.OriginalURL,
-			link.ShortURL,
-			link.CorrelationID,
-		)
-		if err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
+	return nil
 }

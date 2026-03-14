@@ -30,10 +30,9 @@ type Storage struct {
 var _ LinkStore = (*Storage)(nil)
 
 type Link struct {
-	UUID          int    `json:"uuid"`
-	ShortURL      string `json:"short_url"`
-	OriginalURL   string `json:"original_url"`
-	CorrelationID string `json:"correlation_id"`
+	UUID        int    `json:"uuid"`
+	ShortURL    string `json:"short_url"`
+	OriginalURL string `json:"original_url"`
 }
 
 func NewStorage(filename string) *Storage {

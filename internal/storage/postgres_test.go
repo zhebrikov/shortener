@@ -36,8 +36,8 @@ func TestPostgresStorage_WriteStorage(t *testing.T) {
 	ps := NewPostgresStorage(db)
 	link := Link{UUID: 1, ShortURL: "short1", OriginalURL: "https://example.com/one"}
 
-	mock.ExpectExec("INSERT INTO links \\(url, short_url, str_id\\) VALUES \\(\\$1, \\$2, \\$3\\)").
-		WithArgs(link.OriginalURL, link.ShortURL, link.CorrelationID).
+	mock.ExpectExec("INSERT INTO links \\(url, short_url\\) VALUES \\(\\$1, \\$2\\)").
+		WithArgs(link.OriginalURL, link.ShortURL).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := ps.WriteStorage(link); err != nil {
@@ -58,8 +58,8 @@ func TestPostgresStorage_WriteStorage_Error(t *testing.T) {
 	ps := NewPostgresStorage(db)
 	link := Link{UUID: 1, ShortURL: "x", OriginalURL: "https://x.com"}
 
-	mock.ExpectExec("INSERT INTO links \\(url, short_url, str_id\\) VALUES \\(\\$1, \\$2, \\$3\\)").
-		WithArgs(link.OriginalURL, link.ShortURL, link.CorrelationID).
+	mock.ExpectExec("INSERT INTO links \\(url, short_url\\) VALUES \\(\\$1, \\$2\\)").
+		WithArgs(link.OriginalURL, link.ShortURL).
 		WillReturnError(sql.ErrConnDone)
 
 	if err := ps.WriteStorage(link); err != sql.ErrConnDone {
@@ -80,8 +80,8 @@ func TestPostgresStorage_WriteStorage_UniqueViolation(t *testing.T) {
 	ps := NewPostgresStorage(db)
 	link := Link{UUID: 1, ShortURL: "x", OriginalURL: "https://x.com"}
 
-	mock.ExpectExec("INSERT INTO links \\(url, short_url, str_id\\) VALUES \\(\\$1, \\$2, \\$3\\)").
-		WithArgs(link.OriginalURL, link.ShortURL, link.CorrelationID).
+	mock.ExpectExec("INSERT INTO links \\(url, short_url\\) VALUES \\(\\$1, \\$2\\)").
+		WithArgs(link.OriginalURL, link.ShortURL).
 		WillReturnError(&pq.Error{Code: pgerrcode.UniqueViolation})
 
 	err = ps.WriteStorage(link)
@@ -267,6 +267,78 @@ func TestPostgresStorage_GetByShortURL_QueryError(t *testing.T) {
 	}
 	if link != nil {
 		t.Errorf("GetByShortURL() link = %+v, want nil", link)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unfulfilled expectations: %v", err)
+	}
+}
+
+func TestPostgresStorage_WriteStorageBatch_Empty(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() err = %v", err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	if err := ps.WriteStorageBatch(nil); err != nil {
+		t.Errorf("WriteStorageBatch(nil) err = %v", err)
+	}
+	if err := ps.WriteStorageBatch([]Link{}); err != nil {
+		t.Errorf("WriteStorageBatch([]) err = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unfulfilled expectations: %v", err)
+	}
+}
+
+func TestPostgresStorage_WriteStorageBatch_Success(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() err = %v", err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	links := []Link{
+		{OriginalURL: "https://a.com", ShortURL: "s1"},
+		{OriginalURL: "https://b.com", ShortURL: "s2"},
+	}
+
+	mock.ExpectExec("INSERT INTO links \\(url, short_url\\) VALUES \\(\\$1, \\$2\\),\\(\\$3, \\$4\\)").
+		WithArgs("https://a.com", "s1", "https://b.com", "s2").
+		WillReturnResult(sqlmock.NewResult(0, 2))
+
+	if err := ps.WriteStorageBatch(links); err != nil {
+		t.Fatalf("WriteStorageBatch() err = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unfulfilled expectations: %v", err)
+	}
+}
+
+func TestPostgresStorage_WriteStorageBatch_UniqueViolation(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() err = %v", err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	links := []Link{
+		{OriginalURL: "https://x.com", ShortURL: "x"},
+	}
+
+	mock.ExpectExec("INSERT INTO links \\(url, short_url\\) VALUES \\(\\$1, \\$2\\)").
+		WithArgs("https://x.com", "x").
+		WillReturnError(&pq.Error{Code: pgerrcode.UniqueViolation})
+
+	err = ps.WriteStorageBatch(links)
+	if err == nil {
+		t.Fatal("WriteStorageBatch() err = nil, want ErrDuplicateURL")
+	}
+	if !errors.Is(err, ErrDuplicateURL) {
+		t.Errorf("WriteStorageBatch() err = %v, want ErrDuplicateURL", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unfulfilled expectations: %v", err)

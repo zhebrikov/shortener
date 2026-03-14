@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 
 	"github.com/zhebrikov/shortener/internal/service"
@@ -39,13 +40,15 @@ func CreateLinkJSON(
 
 	shortURL, err := shortener.CreateLink(input.URL)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("CreateLinkJSON: shortener.CreateLink: %v", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 
 	links, err := store.ReadStorage()
 	if err != nil {
-		http.Error(w, "Failed to read storage", http.StatusInternalServerError)
+		log.Printf("CreateLinkJSON: store.ReadStorage: %v", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 
@@ -67,7 +70,8 @@ func CreateLinkJSON(
 		if errors.Is(err, storage.ErrDuplicateURL) {
 			existingShort, getErr := store.GetShortURLByOriginalURL(input.URL)
 			if getErr != nil {
-				http.Error(w, "Failed to get existing short URL", http.StatusInternalServerError)
+				log.Printf("CreateLinkJSON: store.GetShortURLByOriginalURL: %v", getErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -76,7 +80,8 @@ func CreateLinkJSON(
 			w.Write(resultJSON)
 			return
 		}
-		http.Error(w, "Failed to write storage", http.StatusInternalServerError)
+		log.Printf("CreateLinkJSON: store.WriteStorage: %v", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 
