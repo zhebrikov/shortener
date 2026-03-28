@@ -9,13 +9,13 @@ import (
 
 type ShortenerHandler struct {
 	shortener *service.Shortener
-	storage   *storage.Storage
+	storage   storage.LinkStore
 }
 
-func NewShortenerHandler(shortener *service.Shortener, storage *storage.Storage) *ShortenerHandler {
+func NewShortenerHandler(shortener *service.Shortener, store storage.LinkStore) *ShortenerHandler {
 	return &ShortenerHandler{
 		shortener: shortener,
-		storage:   storage,
+		storage:   store,
 	}
 }
 
@@ -29,4 +29,8 @@ func (h *ShortenerHandler) GetLink(w http.ResponseWriter, r *http.Request) {
 
 func (h *ShortenerHandler) CreateLinkJSON(w http.ResponseWriter, r *http.Request) {
 	CreateLinkJSON(w, r, h.shortener, h.storage)
+}
+
+func (h *ShortenerHandler) CreateLinkBatch(w http.ResponseWriter, r *http.Request) {
+	CreateLinkBatch(w, r, h.shortener, h.storage)
 }

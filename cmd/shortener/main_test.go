@@ -55,6 +55,7 @@ func routerFromMain(t *testing.T, baseURL string) http.Handler {
 	r.Post("/", h.CreateLink)
 	r.Get("/{shortCode}", h.GetLink)
 	r.Post("/api/shorten", h.CreateLinkJSON)
+	r.Post("/api/shorten/batch", h.CreateLinkBatch)
 	return r
 }
 
@@ -74,7 +75,8 @@ func TestGetConfig(t *testing.T) {
 	defaultCfg := Config{
 		ServerAddress: "localhost:8080",
 		BaseURL:       "http://example.com",
-		FileStorage:   "file.json",
+		FileStorage:   "",
+		DatabaseDsn:   "",
 	}
 
 	t.Run("missing SERVER_ADDRESS uses default", func(t *testing.T) {
@@ -117,7 +119,7 @@ func TestGetConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("missing FILE_STORAGE_PATH uses default", func(t *testing.T) {
+	t.Run("missing FILE_STORAGE_PATH uses default (empty)", func(t *testing.T) {
 		oldAddr, addrOk := saveEnv("SERVER_ADDRESS")
 		oldBase, baseOk := saveEnv("BASE_URL")
 		oldFile, fileOk := saveEnv("FILE_STORAGE_PATH")
@@ -132,8 +134,8 @@ func TestGetConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("getConfig() unexpected error: %v", err)
 		}
-		if got.FileStorage != defaultCfg.FileStorage {
-			t.Errorf("getConfig() FileStorage = %q; want %q (default)", got.FileStorage, defaultCfg.FileStorage)
+		if got.FileStorage != "" {
+			t.Errorf("getConfig() FileStorage = %q; want %q (default)", got.FileStorage, "")
 		}
 	})
 
@@ -141,12 +143,15 @@ func TestGetConfig(t *testing.T) {
 		oldAddr, addrOk := saveEnv("SERVER_ADDRESS")
 		oldBase, baseOk := saveEnv("BASE_URL")
 		oldFile, fileOk := saveEnv("FILE_STORAGE_PATH")
+		oldDsn, dsnOk := saveEnv("DATABASE_DSN")
 		os.Setenv("SERVER_ADDRESS", "0.0.0.0:9090")
 		os.Setenv("BASE_URL", "https://short.example.com")
 		os.Setenv("FILE_STORAGE_PATH", "/tmp/links.json")
+		os.Unsetenv("DATABASE_DSN")
 		defer restoreEnv("SERVER_ADDRESS", oldAddr, addrOk)
 		defer restoreEnv("BASE_URL", oldBase, baseOk)
 		defer restoreEnv("FILE_STORAGE_PATH", oldFile, fileOk)
+		defer restoreEnv("DATABASE_DSN", oldDsn, dsnOk)
 
 		got, err := getConfig(defaultCfg)
 		if err != nil {
@@ -306,7 +311,10 @@ func TestMain_GET_RootPath_NotFound(t *testing.T) {
 func TestMain_POST_ApiShorten_Success(t *testing.T) {
 	h := handlerFromMain(t)
 
-	body, _ := json.Marshal(map[string]string{"url": "https://example.com/page"})
+	body, err := json.Marshal(map[string]string{"url": "https://example.com/page"})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -347,7 +355,10 @@ func TestMain_POST_ApiShorten_InvalidJSON_BadRequest(t *testing.T) {
 func TestMain_POST_ApiShorten_MethodNotAllowed(t *testing.T) {
 	r := routerFromMain(t, "localhost:8080")
 
-	body, _ := json.Marshal(map[string]string{"url": "https://example.com"})
+	body, err := json.Marshal(map[string]string{"url": "https://example.com"})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodGet, "/api/shorten", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -461,7 +472,10 @@ func TestRouter_POST_ApiShorten_Success(t *testing.T) {
 	baseURL := "localhost:8080"
 	r := routerFromMain(t, baseURL)
 
-	body, _ := json.Marshal(map[string]string{"url": "https://example.com/page"})
+	body, err := json.Marshal(map[string]string{"url": "https://example.com/page"})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -499,7 +513,10 @@ func TestRouter_POST_ApiShorten_InvalidJSON_BadRequest(t *testing.T) {
 func TestRouter_POST_ApiShorten_ThenRedirect(t *testing.T) {
 	r := routerFromMain(t, "localhost:8080")
 
-	body, _ := json.Marshal(map[string]string{"url": "https://example.com/from-json"})
+	body, err := json.Marshal(map[string]string{"url": "https://example.com/from-json"})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
 	postReq := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
 	postReq.Header.Set("Content-Type", "application/json")
 	postRR := httptest.NewRecorder()
@@ -527,12 +544,71 @@ func TestRouter_POST_ApiShorten_ThenRedirect(t *testing.T) {
 	}
 }
 
+func TestRouter_POST_ApiShortenBatch(t *testing.T) {
+	r := routerFromMain(t, "localhost:8080")
+
+	body, err := json.Marshal([]map[string]string{
+		{"correlation_id": "id1", "original_url": "https://example.com/batch-a"},
+		{"correlation_id": "id2", "original_url": "https://example.com/batch-b"},
+	})
+	if err != nil {
+		t.Fatalf("marshal batch body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/shorten/batch", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Errorf("POST /api/shorten/batch: got status %d, want %d", rr.Code, http.StatusCreated)
+	}
+	var out []struct {
+		CorrelationID string `json:"correlation_id"`
+		ShortURL      string `json:"short_url"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("POST /api/shorten/batch: invalid JSON: %v", err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("POST /api/shorten/batch: len(response) = %d, want 2", len(out))
+	}
+	if out[0].CorrelationID != "id1" || out[1].CorrelationID != "id2" {
+		t.Errorf("correlation_id: got %q, %q", out[0].CorrelationID, out[1].CorrelationID)
+	}
+	for i := range out {
+		if !strings.HasPrefix(out[i].ShortURL, "http://localhost:8080/") {
+			t.Errorf("short_url[%d] = %q, want prefix http://localhost:8080/", i, out[i].ShortURL)
+		}
+	}
+	shortCode := out[0].ShortURL[strings.LastIndex(out[0].ShortURL, "/")+1:]
+	getReq := httptest.NewRequest(http.MethodGet, "/"+shortCode, nil)
+	getRR := httptest.NewRecorder()
+	r.ServeHTTP(getRR, getReq)
+	if getRR.Code != http.StatusTemporaryRedirect || getRR.Header().Get("Location") != "https://example.com/batch-a" {
+		t.Errorf("GET /%s: code=%d location=%q", shortCode, getRR.Code, getRR.Header().Get("Location"))
+	}
+}
+
+func TestRouter_POST_ApiShortenBatch_EmptyRejected(t *testing.T) {
+	r := routerFromMain(t, "localhost:8080")
+	req := httptest.NewRequest(http.MethodPost, "/api/shorten/batch", bytes.NewReader([]byte("[]")))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("POST /api/shorten/batch empty: got status %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+}
+
 // Тесты Gzip middleware через роутер (как в main).
 
 func TestRouter_Gzip_AcceptEncoding_ReturnsCompressed(t *testing.T) {
 	r := routerFromMain(t, "localhost:8080")
 
-	body, _ := json.Marshal(map[string]string{"url": "https://example.com/page"})
+	body, err := json.Marshal(map[string]string{"url": "https://example.com/page"})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept-Encoding", "gzip")
@@ -570,7 +646,10 @@ func TestRouter_Gzip_AcceptEncoding_ReturnsCompressed(t *testing.T) {
 func TestRouter_Gzip_NoAcceptEncoding_ReturnsUncompressed(t *testing.T) {
 	r := routerFromMain(t, "localhost:8080")
 
-	body, _ := json.Marshal(map[string]string{"url": "https://example.com/page"})
+	body, err := json.Marshal(map[string]string{"url": "https://example.com/page"})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()

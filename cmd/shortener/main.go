@@ -1,14 +1,20 @@
 package main
 
 import (
+	"database/sql"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/zhebrikov/shortener/internal/db/postgresql"
 	"github.com/zhebrikov/shortener/internal/handler"
 	"github.com/zhebrikov/shortener/internal/logger"
 	"github.com/zhebrikov/shortener/internal/middleware"
@@ -21,6 +27,8 @@ type Config struct {
 	ServerAddress string
 	BaseURL       string
 	FileStorage   string
+	DatabaseDsn   string
+	MigrationPath string
 }
 
 // getConfig возвращает конфиг: переменные окружения имеют приоритет, иначе используются значения по умолчанию (defaults).
@@ -37,10 +45,20 @@ func getConfig(defaults Config) (Config, error) {
 	if !ok || fileStorage == "" {
 		fileStorage = defaults.FileStorage
 	}
+	databaseDsn, ok := os.LookupEnv("DATABASE_DSN")
+	if !ok || databaseDsn == "" {
+		databaseDsn = defaults.DatabaseDsn
+	}
+	migrationPath, ok := os.LookupEnv("MIGRATIONS_PATH")
+	if !ok || migrationPath == "" {
+		migrationPath = defaults.MigrationPath
+	}
 	return Config{
 		ServerAddress: serverAddress,
 		BaseURL:       baseURL,
 		FileStorage:   fileStorage,
+		DatabaseDsn:   databaseDsn,
+		MigrationPath: migrationPath,
 	}, nil
 }
 
@@ -56,19 +74,61 @@ func portFromServerAddress(serverAddress string) (string, error) {
 func main() {
 	serverAddrFlag := flag.String("a", "localhost:8080", "address of the HTTP server")
 	baseURLFlag := flag.String("b", "localhost:8080", "base URL for shortened links")
-	fileStorageFlag := flag.String("f", "file.json", "file to store the links")
+	fileStorageFlag := flag.String("f", "", "file to store the links (empty = in-memory when no DB)")
+	databaseDsnFlag := flag.String("d", "", "database DSN")
+	migrationPathFlag := flag.String("m", "migrations", "path to the migrations")
 	flag.Parse()
 
 	cfg, err := getConfig(Config{
 		ServerAddress: *serverAddrFlag,
 		BaseURL:       *baseURLFlag,
 		FileStorage:   *fileStorageFlag,
+		DatabaseDsn:   *databaseDsnFlag,
+		MigrationPath: *migrationPathFlag,
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	storage := storage.NewStorage(cfg.FileStorage)
+	// Выбор хранилища: DATABASE_DSN/-d → файл (FILE_STORAGE_PATH/-f) → память.
+	var store storage.LinkStore
+	var db *sql.DB
+	if cfg.DatabaseDsn != "" {
+		var errConn error
+		db, errConn = postgresql.Connection(cfg.DatabaseDsn)
+		if errConn != nil {
+			log.Fatal(errConn)
+		}
+		// Run migrations so user tables exist (required for iteration11 / DB inspect tests).
+		migrationsPath := cfg.MigrationPath
+		if migrationsPath == "" {
+			migrationsPath = "migrations"
+		}
+		if abs, err := filepath.Abs(migrationsPath); err == nil {
+			migrationsPath = abs
+		}
+		m, errMig := migrate.New("file://"+migrationsPath, cfg.DatabaseDsn)
+		if errMig != nil {
+			migrationsPath = "../migrations"
+			if abs, err := filepath.Abs(migrationsPath); err == nil {
+				migrationsPath = abs
+			}
+			m, errMig = migrate.New("file://"+migrationsPath, cfg.DatabaseDsn)
+			if errMig != nil {
+				log.Fatal(errMig)
+			}
+		}
+		if errUp := m.Up(); errUp != nil && errUp != migrate.ErrNoChange {
+			_, _ = m.Close()
+			log.Fatal(errUp)
+		}
+		_, _ = m.Close()
+		store = storage.NewPostgresStorage(db)
+	} else if cfg.FileStorage != "" {
+		store = storage.NewStorage(cfg.FileStorage)
+	} else {
+		store = storage.NewMemoryStorage()
+	}
 
 	port, err := portFromServerAddress(cfg.ServerAddress)
 	if err != nil {
@@ -81,7 +141,7 @@ func main() {
 	}
 
 	shortener := service.NewShortener(cfg.BaseURL)
-	h := handler.NewShortenerHandler(shortener, storage)
+	h := handler.NewShortenerHandler(shortener, store)
 
 	r := chi.NewRouter()
 	r.Use(logger.Middleware(zapLog))
@@ -89,6 +149,8 @@ func main() {
 	r.Post("/", h.CreateLink)
 	r.Get("/{shortCode}", h.GetLink)
 	r.Post("/api/shorten", h.CreateLinkJSON)
+	r.Get("/ping", handler.HealthCheck(db))
+	r.Post("/api/shorten/batch", h.CreateLinkBatch)
 
 	zapLog.Info("server started", zap.String("address", "http://localhost"+port))
 

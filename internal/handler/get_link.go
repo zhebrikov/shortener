@@ -11,7 +11,7 @@ func GetLink(
 	w http.ResponseWriter,
 	r *http.Request,
 	shortener *service.Shortener,
-	store *storage.Storage,
+	store storage.LinkStore,
 ) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

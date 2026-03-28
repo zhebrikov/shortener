@@ -62,7 +62,7 @@ func (s *Shortener) CreateLink(originalURL string) (string, error) {
 	}
 }
 
-func (s *Shortener) GetLink(shortCode string, store *storage.Storage) *string {
+func (s *Shortener) GetLink(shortCode string, store storage.LinkStore) *string {
 	links, err := store.ReadStorage()
 	if err != nil {
 		return nil
