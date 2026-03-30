@@ -62,16 +62,19 @@ func (s *Shortener) CreateLink(originalURL string) (string, error) {
 	}
 }
 
-func (s *Shortener) GetLink(shortCode string, store storage.LinkStore) *string {
+// GetLink возвращает оригинальный URL; если ссылка помечена удалённой — originalURL=nil, gone=true.
+func (s *Shortener) GetLink(shortCode string, store storage.LinkStore) (originalURL *string, gone bool) {
 	links, err := store.ReadStorage()
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	for _, link := range links {
-		// ShortURL в storage может быть полный URL или только shortCode
-		if link.ShortURL == shortCode || strings.HasSuffix(link.ShortURL, "/"+shortCode) {
-			return &link.OriginalURL
+		if storage.LinkMatchesShortCode(link.ShortURL, shortCode) {
+			if link.IsDeleted {
+				return nil, true
+			}
+			return &link.OriginalURL, false
 		}
 	}
-	return nil
+	return nil, false
 }

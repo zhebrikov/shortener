@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/zhebrikov/shortener/internal/asyncdelete"
 	"github.com/zhebrikov/shortener/internal/auth"
 	"github.com/zhebrikov/shortener/internal/handler"
 	"github.com/zhebrikov/shortener/internal/logger"
@@ -41,7 +42,7 @@ func handlerFromMain(t *testing.T) *handler.ShortenerHandler {
 	t.Helper()
 	shortener := service.NewShortener("localhost:8080")
 	store := storageFromTestFile(t)
-	return handler.NewShortenerHandler(shortener, store)
+	return handler.NewShortenerHandler(shortener, store, asyncdelete.NewWorker(store))
 }
 
 // routerFromMain возвращает роутер в том же виде, что и в main (для интеграционных тестов).
@@ -49,7 +50,7 @@ func routerFromMain(t *testing.T, baseURL string) http.Handler {
 	t.Helper()
 	shortener := service.NewShortener(baseURL)
 	store := storageFromTestFile(t)
-	h := handler.NewShortenerHandler(shortener, store)
+	h := handler.NewShortenerHandler(shortener, store, asyncdelete.NewWorker(store))
 	r := chi.NewRouter()
 	r.Use(logger.Middleware(zap.NewNop()))
 	r.Use(middleware.Gzip)
@@ -59,6 +60,7 @@ func routerFromMain(t *testing.T, baseURL string) http.Handler {
 	r.Post("/api/shorten", h.CreateLinkJSON)
 	r.Post("/api/shorten/batch", h.CreateLinkBatch)
 	r.Get("/api/user/urls", h.ListUserURLs)
+	r.Delete("/api/user/urls", h.DeleteUserURLs)
 	return r
 }
 

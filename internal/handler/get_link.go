@@ -19,8 +19,12 @@ func GetLink(
 	}
 	shortCode := r.URL.Path[1:]
 
-	originalURL := shortener.GetLink(shortCode, store)
+	originalURL, gone := shortener.GetLink(shortCode, store)
 
+	if gone {
+		w.WriteHeader(http.StatusGone)
+		return
+	}
 	if originalURL == nil {
 		http.NotFound(w, r)
 		return

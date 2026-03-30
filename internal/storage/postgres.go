@@ -24,7 +24,7 @@ func NewPostgresStorage(db *sql.DB) *PostgresStorage {
 }
 
 func (p *PostgresStorage) ReadStorage() ([]Link, error) {
-	rows, err := p.db.Query("SELECT url, short_url, user_id FROM links ORDER BY id")
+	rows, err := p.db.Query("SELECT url, short_url, user_id, is_deleted FROM links ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -34,14 +34,15 @@ func (p *PostgresStorage) ReadStorage() ([]Link, error) {
 	for i := 1; rows.Next(); i++ {
 		var url, shortURL string
 		var userID sql.NullString
-		if err := rows.Scan(&url, &shortURL, &userID); err != nil {
+		var isDeleted bool
+		if err := rows.Scan(&url, &shortURL, &userID, &isDeleted); err != nil {
 			return nil, err
 		}
 		uid := ""
 		if userID.Valid {
 			uid = userID.String
 		}
-		links = append(links, Link{UUID: i, ShortURL: shortURL, OriginalURL: url, UserID: uid})
+		links = append(links, Link{UUID: i, ShortURL: shortURL, OriginalURL: url, UserID: uid, IsDeleted: isDeleted})
 	}
 	return links, rows.Err()
 }
@@ -50,7 +51,8 @@ func (p *PostgresStorage) ReadStorage() ([]Link, error) {
 func (p *PostgresStorage) GetByShortURL(shortURL string) (*Link, error) {
 	var url, short string
 	var userID sql.NullString
-	err := p.db.QueryRow("SELECT url, short_url, user_id FROM links WHERE short_url = $1", shortURL).Scan(&url, &short, &userID)
+	var isDeleted bool
+	err := p.db.QueryRow("SELECT url, short_url, user_id, is_deleted FROM links WHERE short_url = $1", shortURL).Scan(&url, &short, &userID, &isDeleted)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +60,7 @@ func (p *PostgresStorage) GetByShortURL(shortURL string) (*Link, error) {
 	if userID.Valid {
 		uid = userID.String
 	}
-	return &Link{ShortURL: short, OriginalURL: url, UserID: uid}, nil
+	return &Link{ShortURL: short, OriginalURL: url, UserID: uid, IsDeleted: isDeleted}, nil
 }
 
 func (p *PostgresStorage) GetShortURLByOriginalURL(originalURL string) (string, error) {
@@ -79,10 +81,11 @@ func (p *PostgresStorage) WriteStorage(link Link) error {
 		userID = link.UserID
 	}
 	_, err := p.db.Exec(
-		"INSERT INTO links (url, short_url, user_id) VALUES ($1, $2, $3)",
+		"INSERT INTO links (url, short_url, user_id, is_deleted) VALUES ($1, $2, $3, $4)",
 		link.OriginalURL,
 		link.ShortURL,
 		userID,
+		false,
 	)
 	if err != nil {
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == pgerrcode.UniqueViolation {
@@ -99,17 +102,17 @@ func (p *PostgresStorage) WriteStorageBatch(links []Link) error {
 		return nil
 	}
 	valueStrings := make([]string, 0, len(links))
-	valueArgs := make([]interface{}, 0, len(links)*3)
+	valueArgs := make([]interface{}, 0, len(links)*4)
 	for i, link := range links {
-		n := i * 3
-		valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d, $%d)", n+1, n+2, n+3))
+		n := i * 4
+		valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d, $%d, $%d)", n+1, n+2, n+3, n+4))
 		var uid interface{}
 		if link.UserID != "" {
 			uid = link.UserID
 		}
-		valueArgs = append(valueArgs, link.OriginalURL, link.ShortURL, uid)
+		valueArgs = append(valueArgs, link.OriginalURL, link.ShortURL, uid, false)
 	}
-	stmt := "INSERT INTO links (url, short_url, user_id) VALUES " + strings.Join(valueStrings, ",")
+	stmt := "INSERT INTO links (url, short_url, user_id, is_deleted) VALUES " + strings.Join(valueStrings, ",")
 	_, err := p.db.Exec(stmt, valueArgs...)
 	if err != nil {
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == pgerrcode.UniqueViolation {
@@ -125,7 +128,7 @@ func (p *PostgresStorage) GetLinksByUserID(userID string) ([]Link, error) {
 		return nil, nil
 	}
 	rows, err := p.db.Query(
-		"SELECT url, short_url FROM links WHERE user_id = $1::uuid ORDER BY id",
+		"SELECT url, short_url FROM links WHERE user_id = $1::uuid AND is_deleted = false ORDER BY id",
 		userID,
 	)
 	if err != nil {
@@ -142,4 +145,24 @@ func (p *PostgresStorage) GetLinksByUserID(userID string) ([]Link, error) {
 		links = append(links, Link{UUID: i, ShortURL: shortURL, OriginalURL: url, UserID: userID})
 	}
 	return links, rows.Err()
+}
+
+// SoftDeleteURLsByUser выставляет is_deleted для строк, где short_url совпадает с идентификатором или оканчивается на /code.
+func (p *PostgresStorage) SoftDeleteURLsByUser(userID string, shortCodes []string) error {
+	if userID == "" || len(shortCodes) == 0 {
+		return nil
+	}
+	_, err := p.db.Exec(`
+		UPDATE links SET is_deleted = true
+		WHERE user_id = $1::uuid
+		AND is_deleted = false
+		AND (
+			short_url = ANY($2::text[])
+			OR EXISTS (
+				SELECT 1 FROM unnest($2::text[]) AS x(code)
+				WHERE links.short_url LIKE '%/' || x.code
+			)
+		)
+	`, userID, pq.Array(shortCodes))
+	return err
 }

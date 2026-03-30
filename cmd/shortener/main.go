@@ -14,6 +14,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/zhebrikov/shortener/internal/asyncdelete"
 	"github.com/zhebrikov/shortener/internal/auth"
 	"github.com/zhebrikov/shortener/internal/db/postgresql"
 	"github.com/zhebrikov/shortener/internal/handler"
@@ -154,7 +155,8 @@ func main() {
 	}
 
 	shortener := service.NewShortener(cfg.BaseURL)
-	h := handler.NewShortenerHandler(shortener, store)
+	deleter := asyncdelete.NewWorker(store)
+	h := handler.NewShortenerHandler(shortener, store, deleter)
 
 	r := chi.NewRouter()
 	r.Use(logger.Middleware(zapLog))
@@ -166,6 +168,7 @@ func main() {
 	r.Get("/ping", handler.HealthCheck(db))
 	r.Post("/api/shorten/batch", h.CreateLinkBatch)
 	r.Get("/api/user/urls", h.ListUserURLs)
+	r.Delete("/api/user/urls", h.DeleteUserURLs)
 
 	zapLog.Info("server started", zap.String("address", "http://localhost"+port))
 
