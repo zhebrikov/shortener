@@ -4,14 +4,15 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/zhebrikov/shortener/internal/storage"
 )
 
 type Shortener struct {
+	mu       sync.Mutex
 	repoLink map[string]string
 	baseURL  string
 }
@@ -27,7 +28,6 @@ func (s *Shortener) shortURL(shortCode string) (string, error) {
 	if strings.HasPrefix(s.baseURL, "http://") || strings.HasPrefix(s.baseURL, "https://") {
 		fullURL, err := url.JoinPath(s.baseURL, shortCode)
 		if err != nil {
-			log.Fatal(err)
 			return "", err
 		}
 		return fullURL, nil
@@ -50,15 +50,20 @@ func (s *Shortener) CreateLink(originalURL string) (string, error) {
 		hash := sha1.Sum([]byte(input))
 		shortCode := hex.EncodeToString(hash[:])[:8]
 
-		if _, exists := s.repoLink[shortCode]; !exists {
+		s.mu.Lock()
+		_, exists := s.repoLink[shortCode]
+		if !exists {
 			s.repoLink[shortCode] = originalURL
-			shortURL, err := s.shortURL(shortCode)
-			if err != nil {
-				log.Fatal(err)
-				return "", err
-			}
-			return shortURL, nil
 		}
+		s.mu.Unlock()
+		if exists {
+			continue
+		}
+		shortURL, err := s.shortURL(shortCode)
+		if err != nil {
+			return "", err
+		}
+		return shortURL, nil
 	}
 }
 
