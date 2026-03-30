@@ -34,3 +34,7 @@ func (h *ShortenerHandler) CreateLinkJSON(w http.ResponseWriter, r *http.Request
 func (h *ShortenerHandler) CreateLinkBatch(w http.ResponseWriter, r *http.Request) {
 	CreateLinkBatch(w, r, h.shortener, h.storage)
 }
+
+func (h *ShortenerHandler) ListUserURLs(w http.ResponseWriter, r *http.Request) {
+	ListUserURLs(w, r, h.storage)
+}

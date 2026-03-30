@@ -19,6 +19,8 @@ type LinkStore interface {
 	WriteStorageBatch(links []Link) error
 	// GetShortURLByOriginalURL возвращает уже имеющийся сокращённый URL по оригиналу или ошибку.
 	GetShortURLByOriginalURL(originalURL string) (string, error)
+	// GetLinksByUserID возвращает все ссылки, созданные пользователем с данным идентификатором.
+	GetLinksByUserID(userID string) ([]Link, error)
 }
 
 type Storage struct {
@@ -33,6 +35,7 @@ type Link struct {
 	UUID        int    `json:"uuid"`
 	ShortURL    string `json:"short_url"`
 	OriginalURL string `json:"original_url"`
+	UserID      string `json:"user_id,omitempty"`
 }
 
 func NewStorage(filename string) *Storage {
@@ -125,4 +128,21 @@ func (s *Storage) GetShortURLByOriginalURL(originalURL string) (string, error) {
 		}
 	}
 	return "", errors.New("url not found")
+}
+
+func (s *Storage) GetLinksByUserID(userID string) ([]Link, error) {
+	if userID == "" {
+		return nil, nil
+	}
+	links, err := s.ReadStorage()
+	if err != nil {
+		return nil, err
+	}
+	var out []Link
+	for _, l := range links {
+		if l.UserID == userID {
+			out = append(out, l)
+		}
+	}
+	return out, nil
 }

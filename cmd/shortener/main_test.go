@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/zhebrikov/shortener/internal/auth"
 	"github.com/zhebrikov/shortener/internal/handler"
 	"github.com/zhebrikov/shortener/internal/logger"
 	"github.com/zhebrikov/shortener/internal/middleware"
@@ -52,10 +53,12 @@ func routerFromMain(t *testing.T, baseURL string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(logger.Middleware(zap.NewNop()))
 	r.Use(middleware.Gzip)
+	r.Use(auth.Middleware("test-secret-key-for-router-tests"))
 	r.Post("/", h.CreateLink)
 	r.Get("/{shortCode}", h.GetLink)
 	r.Post("/api/shorten", h.CreateLinkJSON)
 	r.Post("/api/shorten/batch", h.CreateLinkBatch)
+	r.Get("/api/user/urls", h.ListUserURLs)
 	return r
 }
 
@@ -640,6 +643,65 @@ func TestRouter_Gzip_AcceptEncoding_ReturnsCompressed(t *testing.T) {
 	}
 	if !strings.HasPrefix(out.Result, "http://localhost:8080/") {
 		t.Errorf("response url %q does not start with base URL", out.Result)
+	}
+}
+
+func TestRouter_GET_UserURLs_EmptyCookie_Unauthorized(t *testing.T) {
+	r := routerFromMain(t, "localhost:8080")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/user/urls", nil)
+	req.Header.Set("Cookie", auth.CookieName+"=")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("GET /api/user/urls с пустой кукой: статус %d, ожидалось %d", rr.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestRouter_GET_UserURLs_NoLinks_NoContent(t *testing.T) {
+	r := routerFromMain(t, "localhost:8080")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/user/urls", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Errorf("GET /api/user/urls без ссылок: статус %d, ожидалось %d", rr.Code, http.StatusNoContent)
+	}
+}
+
+func TestRouter_GET_UserURLs_AfterJSONShorten_SameSession(t *testing.T) {
+	r := routerFromMain(t, "localhost:8080")
+
+	body, err := json.Marshal(map[string]string{"url": "https://example.com/mine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	postReq := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
+	postReq.Header.Set("Content-Type", "application/json")
+	postRR := httptest.NewRecorder()
+	r.ServeHTTP(postRR, postReq)
+	if postRR.Code != http.StatusCreated {
+		t.Fatalf("POST /api/shorten: статус %d", postRR.Code)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/user/urls", nil)
+	for _, c := range postRR.Result().Cookies() {
+		getReq.AddCookie(c)
+	}
+	getRR := httptest.NewRecorder()
+	r.ServeHTTP(getRR, getReq)
+
+	if getRR.Code != http.StatusOK {
+		t.Fatalf("GET /api/user/urls: статус %d", getRR.Code)
+	}
+	var items []handler.UserURLItem
+	if err := json.NewDecoder(getRR.Body).Decode(&items); err != nil {
+		t.Fatalf("JSON: %v", err)
+	}
+	if len(items) != 1 || items[0].OriginalURL != "https://example.com/mine" {
+		t.Errorf("ответ = %+v", items)
 	}
 }
 

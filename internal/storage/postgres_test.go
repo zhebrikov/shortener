@@ -36,8 +36,8 @@ func TestPostgresStorage_WriteStorage(t *testing.T) {
 	ps := NewPostgresStorage(db)
 	link := Link{UUID: 1, ShortURL: "short1", OriginalURL: "https://example.com/one"}
 
-	mock.ExpectExec("INSERT INTO links \\(url, short_url\\) VALUES \\(\\$1, \\$2\\)").
-		WithArgs(link.OriginalURL, link.ShortURL).
+	mock.ExpectExec("INSERT INTO links \\(url, short_url, user_id\\) VALUES \\(\\$1, \\$2, \\$3\\)").
+		WithArgs(link.OriginalURL, link.ShortURL, nil).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := ps.WriteStorage(link); err != nil {
@@ -58,8 +58,8 @@ func TestPostgresStorage_WriteStorage_Error(t *testing.T) {
 	ps := NewPostgresStorage(db)
 	link := Link{UUID: 1, ShortURL: "x", OriginalURL: "https://x.com"}
 
-	mock.ExpectExec("INSERT INTO links \\(url, short_url\\) VALUES \\(\\$1, \\$2\\)").
-		WithArgs(link.OriginalURL, link.ShortURL).
+	mock.ExpectExec("INSERT INTO links \\(url, short_url, user_id\\) VALUES \\(\\$1, \\$2, \\$3\\)").
+		WithArgs(link.OriginalURL, link.ShortURL, nil).
 		WillReturnError(sql.ErrConnDone)
 
 	if err := ps.WriteStorage(link); err != sql.ErrConnDone {
@@ -80,8 +80,8 @@ func TestPostgresStorage_WriteStorage_UniqueViolation(t *testing.T) {
 	ps := NewPostgresStorage(db)
 	link := Link{UUID: 1, ShortURL: "x", OriginalURL: "https://x.com"}
 
-	mock.ExpectExec("INSERT INTO links \\(url, short_url\\) VALUES \\(\\$1, \\$2\\)").
-		WithArgs(link.OriginalURL, link.ShortURL).
+	mock.ExpectExec("INSERT INTO links \\(url, short_url, user_id\\) VALUES \\(\\$1, \\$2, \\$3\\)").
+		WithArgs(link.OriginalURL, link.ShortURL, nil).
 		WillReturnError(&pq.Error{Code: pgerrcode.UniqueViolation})
 
 	err = ps.WriteStorage(link)
@@ -128,8 +128,8 @@ func TestPostgresStorage_ReadStorage_Empty(t *testing.T) {
 	defer db.Close()
 
 	ps := NewPostgresStorage(db)
-	rows := sqlmock.NewRows([]string{"url", "short_url"})
-	mock.ExpectQuery("SELECT url, short_url FROM links ORDER BY id").
+	rows := sqlmock.NewRows([]string{"url", "short_url", "user_id"})
+	mock.ExpectQuery("SELECT url, short_url, user_id FROM links ORDER BY id").
 		WillReturnRows(rows)
 
 	links, err := ps.ReadStorage()
@@ -152,10 +152,10 @@ func TestPostgresStorage_ReadStorage_WithRows(t *testing.T) {
 	defer db.Close()
 
 	ps := NewPostgresStorage(db)
-	rows := sqlmock.NewRows([]string{"url", "short_url"}).
-		AddRow("https://first.com", "f1").
-		AddRow("https://second.com", "s2")
-	mock.ExpectQuery("SELECT url, short_url FROM links ORDER BY id").
+	rows := sqlmock.NewRows([]string{"url", "short_url", "user_id"}).
+		AddRow("https://first.com", "f1", nil).
+		AddRow("https://second.com", "s2", nil)
+	mock.ExpectQuery("SELECT url, short_url, user_id FROM links ORDER BY id").
 		WillReturnRows(rows)
 
 	links, err := ps.ReadStorage()
@@ -184,7 +184,7 @@ func TestPostgresStorage_ReadStorage_QueryError(t *testing.T) {
 	defer db.Close()
 
 	ps := NewPostgresStorage(db)
-	mock.ExpectQuery("SELECT url, short_url FROM links ORDER BY id").
+	mock.ExpectQuery("SELECT url, short_url, user_id FROM links ORDER BY id").
 		WillReturnError(sql.ErrNoRows)
 
 	_, err = ps.ReadStorage()
@@ -204,9 +204,9 @@ func TestPostgresStorage_GetByShortURL_Found(t *testing.T) {
 	defer db.Close()
 
 	ps := NewPostgresStorage(db)
-	rows := sqlmock.NewRows([]string{"url", "short_url"}).
-		AddRow("https://example.com/page", "abc123")
-	mock.ExpectQuery("SELECT url, short_url FROM links WHERE short_url = \\$1").
+	rows := sqlmock.NewRows([]string{"url", "short_url", "user_id"}).
+		AddRow("https://example.com/page", "abc123", nil)
+	mock.ExpectQuery("SELECT url, short_url, user_id FROM links WHERE short_url = \\$1").
 		WithArgs("abc123").
 		WillReturnRows(rows)
 
@@ -233,7 +233,7 @@ func TestPostgresStorage_GetByShortURL_NotFound(t *testing.T) {
 	defer db.Close()
 
 	ps := NewPostgresStorage(db)
-	mock.ExpectQuery("SELECT url, short_url FROM links WHERE short_url = \\$1").
+	mock.ExpectQuery("SELECT url, short_url, user_id FROM links WHERE short_url = \\$1").
 		WithArgs("missing").
 		WillReturnError(sql.ErrNoRows)
 
@@ -257,7 +257,7 @@ func TestPostgresStorage_GetByShortURL_QueryError(t *testing.T) {
 	defer db.Close()
 
 	ps := NewPostgresStorage(db)
-	mock.ExpectQuery("SELECT url, short_url FROM links WHERE short_url = \\$1").
+	mock.ExpectQuery("SELECT url, short_url, user_id FROM links WHERE short_url = \\$1").
 		WithArgs("x").
 		WillReturnError(sql.ErrConnDone)
 
@@ -305,8 +305,8 @@ func TestPostgresStorage_WriteStorageBatch_Success(t *testing.T) {
 		{OriginalURL: "https://b.com", ShortURL: "s2"},
 	}
 
-	mock.ExpectExec("INSERT INTO links \\(url, short_url\\) VALUES \\(\\$1, \\$2\\),\\(\\$3, \\$4\\)").
-		WithArgs("https://a.com", "s1", "https://b.com", "s2").
+	mock.ExpectExec("INSERT INTO links \\(url, short_url, user_id\\) VALUES \\(\\$1, \\$2, \\$3\\),\\(\\$4, \\$5, \\$6\\)").
+		WithArgs("https://a.com", "s1", nil, "https://b.com", "s2", nil).
 		WillReturnResult(sqlmock.NewResult(0, 2))
 
 	if err := ps.WriteStorageBatch(links); err != nil {
@@ -329,8 +329,8 @@ func TestPostgresStorage_WriteStorageBatch_UniqueViolation(t *testing.T) {
 		{OriginalURL: "https://x.com", ShortURL: "x"},
 	}
 
-	mock.ExpectExec("INSERT INTO links \\(url, short_url\\) VALUES \\(\\$1, \\$2\\)").
-		WithArgs("https://x.com", "x").
+	mock.ExpectExec("INSERT INTO links \\(url, short_url, user_id\\) VALUES \\(\\$1, \\$2, \\$3\\)").
+		WithArgs("https://x.com", "x", nil).
 		WillReturnError(&pq.Error{Code: pgerrcode.UniqueViolation})
 
 	err = ps.WriteStorageBatch(links)

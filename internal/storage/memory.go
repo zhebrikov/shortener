@@ -60,3 +60,18 @@ func (m *MemoryStorage) GetShortURLByOriginalURL(originalURL string) (string, er
 	}
 	return "", errors.New("url not found")
 }
+
+func (m *MemoryStorage) GetLinksByUserID(userID string) ([]Link, error) {
+	if userID == "" {
+		return nil, nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []Link
+	for _, l := range m.links {
+		if l.UserID == userID {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}

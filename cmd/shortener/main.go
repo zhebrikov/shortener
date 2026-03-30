@@ -14,6 +14,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/zhebrikov/shortener/internal/auth"
 	"github.com/zhebrikov/shortener/internal/db/postgresql"
 	"github.com/zhebrikov/shortener/internal/handler"
 	"github.com/zhebrikov/shortener/internal/logger"
@@ -29,6 +30,7 @@ type Config struct {
 	FileStorage   string
 	DatabaseDsn   string
 	MigrationPath string
+	SecretKey     string
 }
 
 // getConfig возвращает конфиг: переменные окружения имеют приоритет, иначе используются значения по умолчанию (defaults).
@@ -53,12 +55,17 @@ func getConfig(defaults Config) (Config, error) {
 	if !ok || migrationPath == "" {
 		migrationPath = defaults.MigrationPath
 	}
+	secretKey, ok := os.LookupEnv("SECRET_KEY")
+	if !ok || secretKey == "" {
+		secretKey = defaults.SecretKey
+	}
 	return Config{
 		ServerAddress: serverAddress,
 		BaseURL:       baseURL,
 		FileStorage:   fileStorage,
 		DatabaseDsn:   databaseDsn,
 		MigrationPath: migrationPath,
+		SecretKey:     secretKey,
 	}, nil
 }
 
@@ -77,6 +84,7 @@ func main() {
 	fileStorageFlag := flag.String("f", "", "file to store the links (empty = in-memory when no DB)")
 	databaseDsnFlag := flag.String("d", "", "database DSN")
 	migrationPathFlag := flag.String("m", "migrations", "path to the migrations")
+	secretKeyFlag := flag.String("k", "", "secret key for signed user cookie (or SECRET_KEY env)")
 	flag.Parse()
 
 	cfg, err := getConfig(Config{
@@ -85,9 +93,14 @@ func main() {
 		FileStorage:   *fileStorageFlag,
 		DatabaseDsn:   *databaseDsnFlag,
 		MigrationPath: *migrationPathFlag,
+		SecretKey:     *secretKeyFlag,
 	})
 	if err != nil {
 		log.Fatal(err)
+	}
+	secretKey := cfg.SecretKey
+	if secretKey == "" {
+		secretKey = "dev-insecure-secret-change-me"
 	}
 
 	// Выбор хранилища: DATABASE_DSN/-d → файл (FILE_STORAGE_PATH/-f) → память.
@@ -146,11 +159,13 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(logger.Middleware(zapLog))
 	r.Use(middleware.Gzip)
+	r.Use(auth.Middleware(secretKey))
 	r.Post("/", h.CreateLink)
 	r.Get("/{shortCode}", h.GetLink)
 	r.Post("/api/shorten", h.CreateLinkJSON)
 	r.Get("/ping", handler.HealthCheck(db))
 	r.Post("/api/shorten/batch", h.CreateLinkBatch)
+	r.Get("/api/user/urls", h.ListUserURLs)
 
 	zapLog.Info("server started", zap.String("address", "http://localhost"+port))
 
