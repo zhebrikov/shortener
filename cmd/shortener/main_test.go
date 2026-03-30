@@ -688,8 +688,11 @@ func TestRouter_GET_UserURLs_AfterJSONShorten_SameSession(t *testing.T) {
 		t.Fatalf("POST /api/shorten: статус %d", postRR.Code)
 	}
 
+	postResp := postRR.Result()
+	defer postResp.Body.Close()
+
 	getReq := httptest.NewRequest(http.MethodGet, "/api/user/urls", nil)
-	for _, c := range postRR.Result().Cookies() {
+	for _, c := range postResp.Cookies() {
 		getReq.AddCookie(c)
 	}
 	getRR := httptest.NewRecorder()
