@@ -3,6 +3,7 @@ package service
 import (
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -67,19 +68,30 @@ func (s *Shortener) CreateLink(originalURL string) (string, error) {
 	}
 }
 
-// GetLink возвращает оригинальный URL; если ссылка помечена удалённой — originalURL=nil, gone=true.
-func (s *Shortener) GetLink(shortCode string, store storage.LinkStore) (originalURL *string, gone bool) {
+var (
+	// ErrLinkNotFound означает, что ссылки с данным shortCode в хранилище нет.
+	ErrLinkNotFound = errors.New("link not found")
+	// ErrLinkDeleted означает, что ссылка с данным shortCode существует, но помечена как удалённая.
+	ErrLinkDeleted = errors.New("link deleted")
+)
+
+// GetLink возвращает оригинальный URL.
+// Ошибки:
+// - ErrLinkNotFound: ссылка не найдена (нужно вернуть 404)
+// - ErrLinkDeleted: ссылка помечена как удаленная (нужно вернуть 410)
+// - прочие ошибки: проблемы с хранилищем/парсингом данных (нужно вернуть 500)
+func (s *Shortener) GetLink(shortCode string, store storage.LinkStore) (originalURL string, err error) {
 	links, err := store.ReadStorage()
 	if err != nil {
-		return nil, false
+		return "", err
 	}
 	for _, link := range links {
 		if storage.LinkMatchesShortCode(link.ShortURL, shortCode) {
 			if link.IsDeleted {
-				return nil, true
+				return "", fmt.Errorf("%w: shortCode=%s", ErrLinkDeleted, shortCode)
 			}
-			return &link.OriginalURL, false
+			return link.OriginalURL, nil
 		}
 	}
-	return nil, false
+	return "", fmt.Errorf("%w: shortCode=%s", ErrLinkNotFound, shortCode)
 }

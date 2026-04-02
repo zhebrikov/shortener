@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -77,14 +78,20 @@ func TestDeleteUserURLs_Accepted_AndSoftDelete(t *testing.T) {
 	shortener := service.NewShortener("localhost:8080")
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		u, gone := shortener.GetLink(shortCode, store)
-		if gone {
-			if u != nil {
-				t.Fatal("gone with non-nil url")
+		u, err := shortener.GetLink(shortCode, store)
+		if errors.Is(err, service.ErrLinkDeleted) {
+			if u != "" {
+				t.Fatal("deleted with non-empty url")
 			}
 			return
 		}
+		if err != nil {
+			t.Fatalf("unexpected error while waiting for soft delete: %v", err)
+		}
+		if u == "" {
+			t.Fatal("expected non-empty url while not deleted yet")
+		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatal("ожидалось мягкое удаление и gone=true")
+	t.Fatal("ожидалось мягкое удаление и ErrLinkDeleted")
 }

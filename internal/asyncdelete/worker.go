@@ -12,7 +12,7 @@ type item struct {
 	code   string
 }
 
-// Worker ставит задачи удаления в общую очередь: несколько горутин-отправителей (fanIn) сливаются в один канал.
+// Worker ставит задачи удаления в общую очередь.
 type Worker struct {
 	store       storage.LinkStore
 	in          chan item
@@ -21,9 +21,9 @@ type Worker struct {
 }
 
 const (
-	defaultChanBuf    = 4096
-	defaultTick       = 50 * time.Millisecond
-	defaultMaxBatch   = 256
+	defaultChanBuf  = 4096
+	defaultTick     = 50 * time.Millisecond
+	defaultMaxBatch = 256
 )
 
 // NewWorker запускает фоновую обработку батчей SoftDeleteURLsByUser.
@@ -38,19 +38,21 @@ func NewWorker(store storage.LinkStore) *Worker {
 	return w
 }
 
-// Submit ставит идентификаторы в очередь: для каждого запроса создаётся горутина, которая пишет в общий канал (fanIn).
+// Submit ставит идентификаторы в очередь.
+//
+// Важно: горутина не создаётся на каждый вызов, чтобы не раздувать количество
+// "пишущих" горутин. При заполненной очереди вызов может заблокироваться
+// (backpressure).
 func (w *Worker) Submit(userID string, shortCodes []string) {
 	if w == nil || userID == "" || len(shortCodes) == 0 {
 		return
 	}
-	go func() {
-		for _, c := range shortCodes {
-			if c == "" {
-				continue
-			}
-			w.in <- item{userID: userID, code: c}
+	for _, c := range shortCodes {
+		if c == "" {
+			continue
 		}
-	}()
+		w.in <- item{userID: userID, code: c}
+	}
 }
 
 func (w *Worker) run() {
@@ -63,12 +65,12 @@ func (w *Worker) run() {
 			batch[it.userID] = append(batch[it.userID], it.code)
 			if batchLen(batch) >= w.maxBatchLen {
 				w.flush(batch)
-				batch = make(map[string][]string)
+				batch = make(map[string][]string, w.maxBatchLen)
 			}
 		case <-ticker.C:
 			if len(batch) > 0 {
 				w.flush(batch)
-				batch = make(map[string][]string)
+				batch = make(map[string][]string, w.maxBatchLen)
 			}
 		}
 	}

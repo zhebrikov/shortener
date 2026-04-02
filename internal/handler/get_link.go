@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/zhebrikov/shortener/internal/service"
@@ -19,17 +20,23 @@ func GetLink(
 	}
 	shortCode := r.URL.Path[1:]
 
-	originalURL, gone := shortener.GetLink(shortCode, store)
+	originalURL, err := shortener.GetLink(shortCode, store)
 
-	if gone {
+	if errors.Is(err, service.ErrLinkDeleted) {
 		w.WriteHeader(http.StatusGone)
 		return
 	}
-	if originalURL == nil {
+
+	if errors.Is(err, service.ErrLinkNotFound) {
 		http.NotFound(w, r)
 		return
 	}
 
-	w.Header().Set("Location", *originalURL)
+	if err != nil {
+		http.Error(w, "Failed to get link", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Location", originalURL)
 	w.WriteHeader(http.StatusTemporaryRedirect)
 }
