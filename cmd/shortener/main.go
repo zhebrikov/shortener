@@ -167,7 +167,9 @@ func main() {
 	r.Post("/api/shorten", h.CreateLinkJSON)
 	r.Get("/ping", handler.HealthCheck(db))
 	r.Post("/api/shorten/batch", h.CreateLinkBatch)
-	r.Get("/api/user/urls", h.ListUserURLs)
+	r.Get("/api/user/urls", func(w http.ResponseWriter, r *http.Request) {
+		handler.ListUserURLs(w, r, store)
+	})
 	r.Delete("/api/user/urls", h.DeleteUserURLs)
 
 	zapLog.Info("server started", zap.String("address", "http://localhost"+port))

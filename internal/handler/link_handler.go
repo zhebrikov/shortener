@@ -38,10 +38,6 @@ func (h *ShortenerHandler) CreateLinkBatch(w http.ResponseWriter, r *http.Reques
 	CreateLinkBatch(w, r, h.shortener, h.storage)
 }
 
-func (h *ShortenerHandler) ListUserURLs(w http.ResponseWriter, r *http.Request) {
-	ListUserURLs(w, r, h.storage)
-}
-
 func (h *ShortenerHandler) DeleteUserURLs(w http.ResponseWriter, r *http.Request) {
 	DeleteUserURLs(w, r, h.deleter)
 }

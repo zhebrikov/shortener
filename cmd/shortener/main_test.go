@@ -59,7 +59,9 @@ func routerFromMain(t *testing.T, baseURL string) http.Handler {
 	r.Get("/{shortCode}", h.GetLink)
 	r.Post("/api/shorten", h.CreateLinkJSON)
 	r.Post("/api/shorten/batch", h.CreateLinkBatch)
-	r.Get("/api/user/urls", h.ListUserURLs)
+	r.Get("/api/user/urls", func(w http.ResponseWriter, r *http.Request) {
+		handler.ListUserURLs(w, r, store)
+	})
 	r.Delete("/api/user/urls", h.DeleteUserURLs)
 	return r
 }
