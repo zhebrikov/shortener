@@ -60,3 +60,38 @@ func (m *MemoryStorage) GetShortURLByOriginalURL(originalURL string) (string, er
 	}
 	return "", errors.New("url not found")
 }
+
+func (m *MemoryStorage) GetLinksByUserID(userID string) ([]Link, error) {
+	if userID == "" {
+		return nil, nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []Link
+	for _, l := range m.links {
+		if l.UserID == userID && !l.IsDeleted {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+func (m *MemoryStorage) SoftDeleteURLsByUser(userID string, shortCodes []string) error {
+	if userID == "" || len(shortCodes) == 0 {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.links {
+		if m.links[i].UserID != userID || m.links[i].IsDeleted {
+			continue
+		}
+		for _, code := range shortCodes {
+			if LinkMatchesShortCode(m.links[i].ShortURL, code) {
+				m.links[i].IsDeleted = true
+				break
+			}
+		}
+	}
+	return nil
+}

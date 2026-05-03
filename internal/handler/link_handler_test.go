@@ -13,7 +13,7 @@ import (
 func TestNewShortenerHandler(t *testing.T) {
 	shortener := service.NewShortener("test:9090")
 	store := mustTempStorage(t, "[]")
-	h := NewShortenerHandler(shortener, store)
+	h := NewShortenerHandler(shortener, store, nil)
 	if h == nil {
 		t.Fatal("NewShortenerHandler returned nil")
 	}
@@ -60,7 +60,7 @@ func TestShortenerHandler_CreateLink(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := mustTempStorage(t, tt.storage)
-			h := NewShortenerHandler(shortener, store)
+			h := NewShortenerHandler(shortener, store, nil)
 			req := httptest.NewRequest(tt.method, "/", bytes.NewReader(tt.body))
 			if tt.contentType != "" {
 				req.Header.Set("Content-Type", tt.contentType)
@@ -112,6 +112,13 @@ func TestShortenerHandler_GetLink(t *testing.T) {
 			wantStatus: http.StatusNotFound,
 		},
 		{
+			name:       "GET по удалённой ссылке — 410",
+			method:     http.MethodGet,
+			path:       "/" + shortCode,
+			storage:    `[{"uuid":1,"short_url":"` + shortCode + `","original_url":"` + originalURL + `","is_deleted":true}]`,
+			wantStatus: http.StatusGone,
+		},
+		{
 			name:       "POST по коду — 405",
 			method:     http.MethodPost,
 			path:       "/" + shortCode,
@@ -122,7 +129,7 @@ func TestShortenerHandler_GetLink(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := mustTempStorage(t, tt.storage)
-			h := NewShortenerHandler(shortener, store)
+			h := NewShortenerHandler(shortener, store, nil)
 			req := httptest.NewRequest(tt.method, tt.path, nil)
 			rr := httptest.NewRecorder()
 

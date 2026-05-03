@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -19,6 +20,10 @@ type LinkStore interface {
 	WriteStorageBatch(links []Link) error
 	// GetShortURLByOriginalURL возвращает уже имеющийся сокращённый URL по оригиналу или ошибку.
 	GetShortURLByOriginalURL(originalURL string) (string, error)
+	// GetLinksByUserID возвращает все ссылки, созданные пользователем с данным идентификатором.
+	GetLinksByUserID(userID string) ([]Link, error)
+	// SoftDeleteURLsByUser помечает ссылки как удалённые (только принадлежащие userID).
+	SoftDeleteURLsByUser(userID string, shortCodes []string) error
 }
 
 type Storage struct {
@@ -33,6 +38,16 @@ type Link struct {
 	UUID        int    `json:"uuid"`
 	ShortURL    string `json:"short_url"`
 	OriginalURL string `json:"original_url"`
+	UserID      string `json:"user_id,omitempty"`
+	IsDeleted   bool   `json:"is_deleted,omitempty"`
+}
+
+// LinkMatchesShortCode проверяет, что shortCode совпадает с сохранённым значением short_url (полный URL или суффикс /code).
+func LinkMatchesShortCode(storedShortURL, shortCode string) bool {
+	if shortCode == "" {
+		return false
+	}
+	return storedShortURL == shortCode || strings.HasSuffix(storedShortURL, "/"+shortCode)
 }
 
 func NewStorage(filename string) *Storage {
@@ -125,4 +140,50 @@ func (s *Storage) GetShortURLByOriginalURL(originalURL string) (string, error) {
 		}
 	}
 	return "", errors.New("url not found")
+}
+
+func (s *Storage) GetLinksByUserID(userID string) ([]Link, error) {
+	if userID == "" {
+		return nil, nil
+	}
+	links, err := s.ReadStorage()
+	if err != nil {
+		return nil, err
+	}
+	var out []Link
+	for _, l := range links {
+		if l.UserID == userID && !l.IsDeleted {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+func (s *Storage) SoftDeleteURLsByUser(userID string, shortCodes []string) error {
+	if userID == "" || len(shortCodes) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	links, err := s.readStorageLocked()
+	if err != nil {
+		return err
+	}
+	changed := false
+	for i := range links {
+		if links[i].UserID != userID || links[i].IsDeleted {
+			continue
+		}
+		for _, code := range shortCodes {
+			if LinkMatchesShortCode(links[i].ShortURL, code) {
+				links[i].IsDeleted = true
+				changed = true
+				break
+			}
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return s.writeAllStorageLocked(links)
 }

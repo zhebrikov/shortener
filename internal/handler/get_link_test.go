@@ -66,6 +66,13 @@ func TestGetLink(t *testing.T) {
 			storage:    "[]",
 			wantStatus: http.StatusMethodNotAllowed,
 		},
+		{
+			name:       "удалённая ссылка — 410 Gone",
+			method:     http.MethodGet,
+			path:       "/" + shortCode,
+			storage:    `[{"uuid":1,"short_url":"` + shortCode + `","original_url":"` + originalURL + `","is_deleted":true}]`,
+			wantStatus: http.StatusGone,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

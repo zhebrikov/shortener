@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 
+	"github.com/zhebrikov/shortener/internal/asyncdelete"
 	"github.com/zhebrikov/shortener/internal/service"
 	"github.com/zhebrikov/shortener/internal/storage"
 )
@@ -10,12 +11,14 @@ import (
 type ShortenerHandler struct {
 	shortener *service.Shortener
 	storage   storage.LinkStore
+	deleter   *asyncdelete.Worker
 }
 
-func NewShortenerHandler(shortener *service.Shortener, store storage.LinkStore) *ShortenerHandler {
+func NewShortenerHandler(shortener *service.Shortener, store storage.LinkStore, deleter *asyncdelete.Worker) *ShortenerHandler {
 	return &ShortenerHandler{
 		shortener: shortener,
 		storage:   store,
+		deleter:   deleter,
 	}
 }
 
@@ -33,4 +36,8 @@ func (h *ShortenerHandler) CreateLinkJSON(w http.ResponseWriter, r *http.Request
 
 func (h *ShortenerHandler) CreateLinkBatch(w http.ResponseWriter, r *http.Request) {
 	CreateLinkBatch(w, r, h.shortener, h.storage)
+}
+
+func (h *ShortenerHandler) DeleteUserURLs(w http.ResponseWriter, r *http.Request) {
+	DeleteUserURLs(w, r, h.deleter)
 }

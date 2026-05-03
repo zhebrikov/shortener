@@ -36,8 +36,8 @@ func TestPostgresStorage_WriteStorage(t *testing.T) {
 	ps := NewPostgresStorage(db)
 	link := Link{UUID: 1, ShortURL: "short1", OriginalURL: "https://example.com/one"}
 
-	mock.ExpectExec("INSERT INTO links \\(url, short_url\\) VALUES \\(\\$1, \\$2\\)").
-		WithArgs(link.OriginalURL, link.ShortURL).
+	mock.ExpectExec("INSERT INTO links \\(url, short_url, user_id, is_deleted\\) VALUES \\(\\$1, \\$2, \\$3, \\$4\\)").
+		WithArgs(link.OriginalURL, link.ShortURL, nil, false).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := ps.WriteStorage(link); err != nil {
@@ -58,8 +58,8 @@ func TestPostgresStorage_WriteStorage_Error(t *testing.T) {
 	ps := NewPostgresStorage(db)
 	link := Link{UUID: 1, ShortURL: "x", OriginalURL: "https://x.com"}
 
-	mock.ExpectExec("INSERT INTO links \\(url, short_url\\) VALUES \\(\\$1, \\$2\\)").
-		WithArgs(link.OriginalURL, link.ShortURL).
+	mock.ExpectExec("INSERT INTO links \\(url, short_url, user_id, is_deleted\\) VALUES \\(\\$1, \\$2, \\$3, \\$4\\)").
+		WithArgs(link.OriginalURL, link.ShortURL, nil, false).
 		WillReturnError(sql.ErrConnDone)
 
 	if err := ps.WriteStorage(link); err != sql.ErrConnDone {
@@ -80,8 +80,8 @@ func TestPostgresStorage_WriteStorage_UniqueViolation(t *testing.T) {
 	ps := NewPostgresStorage(db)
 	link := Link{UUID: 1, ShortURL: "x", OriginalURL: "https://x.com"}
 
-	mock.ExpectExec("INSERT INTO links \\(url, short_url\\) VALUES \\(\\$1, \\$2\\)").
-		WithArgs(link.OriginalURL, link.ShortURL).
+	mock.ExpectExec("INSERT INTO links \\(url, short_url, user_id, is_deleted\\) VALUES \\(\\$1, \\$2, \\$3, \\$4\\)").
+		WithArgs(link.OriginalURL, link.ShortURL, nil, false).
 		WillReturnError(&pq.Error{Code: pgerrcode.UniqueViolation})
 
 	err = ps.WriteStorage(link)
@@ -128,8 +128,8 @@ func TestPostgresStorage_ReadStorage_Empty(t *testing.T) {
 	defer db.Close()
 
 	ps := NewPostgresStorage(db)
-	rows := sqlmock.NewRows([]string{"url", "short_url"})
-	mock.ExpectQuery("SELECT url, short_url FROM links ORDER BY id").
+	rows := sqlmock.NewRows([]string{"url", "short_url", "user_id", "is_deleted"})
+	mock.ExpectQuery("SELECT url, short_url, user_id, is_deleted FROM links ORDER BY id").
 		WillReturnRows(rows)
 
 	links, err := ps.ReadStorage()
@@ -152,10 +152,10 @@ func TestPostgresStorage_ReadStorage_WithRows(t *testing.T) {
 	defer db.Close()
 
 	ps := NewPostgresStorage(db)
-	rows := sqlmock.NewRows([]string{"url", "short_url"}).
-		AddRow("https://first.com", "f1").
-		AddRow("https://second.com", "s2")
-	mock.ExpectQuery("SELECT url, short_url FROM links ORDER BY id").
+	rows := sqlmock.NewRows([]string{"url", "short_url", "user_id", "is_deleted"}).
+		AddRow("https://first.com", "f1", nil, false).
+		AddRow("https://second.com", "s2", nil, false)
+	mock.ExpectQuery("SELECT url, short_url, user_id, is_deleted FROM links ORDER BY id").
 		WillReturnRows(rows)
 
 	links, err := ps.ReadStorage()
@@ -184,7 +184,7 @@ func TestPostgresStorage_ReadStorage_QueryError(t *testing.T) {
 	defer db.Close()
 
 	ps := NewPostgresStorage(db)
-	mock.ExpectQuery("SELECT url, short_url FROM links ORDER BY id").
+	mock.ExpectQuery("SELECT url, short_url, user_id, is_deleted FROM links ORDER BY id").
 		WillReturnError(sql.ErrNoRows)
 
 	_, err = ps.ReadStorage()
@@ -204,9 +204,9 @@ func TestPostgresStorage_GetByShortURL_Found(t *testing.T) {
 	defer db.Close()
 
 	ps := NewPostgresStorage(db)
-	rows := sqlmock.NewRows([]string{"url", "short_url"}).
-		AddRow("https://example.com/page", "abc123")
-	mock.ExpectQuery("SELECT url, short_url FROM links WHERE short_url = \\$1").
+	rows := sqlmock.NewRows([]string{"url", "short_url", "user_id", "is_deleted"}).
+		AddRow("https://example.com/page", "abc123", nil, false)
+	mock.ExpectQuery("SELECT url, short_url, user_id, is_deleted FROM links WHERE short_url = \\$1").
 		WithArgs("abc123").
 		WillReturnRows(rows)
 
@@ -233,7 +233,7 @@ func TestPostgresStorage_GetByShortURL_NotFound(t *testing.T) {
 	defer db.Close()
 
 	ps := NewPostgresStorage(db)
-	mock.ExpectQuery("SELECT url, short_url FROM links WHERE short_url = \\$1").
+	mock.ExpectQuery("SELECT url, short_url, user_id, is_deleted FROM links WHERE short_url = \\$1").
 		WithArgs("missing").
 		WillReturnError(sql.ErrNoRows)
 
@@ -257,7 +257,7 @@ func TestPostgresStorage_GetByShortURL_QueryError(t *testing.T) {
 	defer db.Close()
 
 	ps := NewPostgresStorage(db)
-	mock.ExpectQuery("SELECT url, short_url FROM links WHERE short_url = \\$1").
+	mock.ExpectQuery("SELECT url, short_url, user_id, is_deleted FROM links WHERE short_url = \\$1").
 		WithArgs("x").
 		WillReturnError(sql.ErrConnDone)
 
@@ -305,8 +305,8 @@ func TestPostgresStorage_WriteStorageBatch_Success(t *testing.T) {
 		{OriginalURL: "https://b.com", ShortURL: "s2"},
 	}
 
-	mock.ExpectExec("INSERT INTO links \\(url, short_url\\) VALUES \\(\\$1, \\$2\\),\\(\\$3, \\$4\\)").
-		WithArgs("https://a.com", "s1", "https://b.com", "s2").
+	mock.ExpectExec("INSERT INTO links \\(url, short_url, user_id, is_deleted\\) VALUES \\(\\$1, \\$2, \\$3, \\$4\\),\\(\\$5, \\$6, \\$7, \\$8\\)").
+		WithArgs("https://a.com", "s1", nil, false, "https://b.com", "s2", nil, false).
 		WillReturnResult(sqlmock.NewResult(0, 2))
 
 	if err := ps.WriteStorageBatch(links); err != nil {
@@ -329,8 +329,8 @@ func TestPostgresStorage_WriteStorageBatch_UniqueViolation(t *testing.T) {
 		{OriginalURL: "https://x.com", ShortURL: "x"},
 	}
 
-	mock.ExpectExec("INSERT INTO links \\(url, short_url\\) VALUES \\(\\$1, \\$2\\)").
-		WithArgs("https://x.com", "x").
+	mock.ExpectExec("INSERT INTO links \\(url, short_url, user_id, is_deleted\\) VALUES \\(\\$1, \\$2, \\$3, \\$4\\)").
+		WithArgs("https://x.com", "x", nil, false).
 		WillReturnError(&pq.Error{Code: pgerrcode.UniqueViolation})
 
 	err = ps.WriteStorageBatch(links)
@@ -339,6 +339,29 @@ func TestPostgresStorage_WriteStorageBatch_UniqueViolation(t *testing.T) {
 	}
 	if !errors.Is(err, ErrDuplicateURL) {
 		t.Errorf("WriteStorageBatch() err = %v, want ErrDuplicateURL", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unfulfilled expectations: %v", err)
+	}
+}
+
+func TestPostgresStorage_SoftDeleteURLsByUser(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() err = %v", err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	const uid = "550e8400-e29b-41d4-a716-446655440000"
+	codes := []string{"x1", "y2"}
+
+	mock.ExpectExec("UPDATE links SET is_deleted = true").
+		WithArgs(uid, pq.Array(codes)).
+		WillReturnResult(sqlmock.NewResult(0, 2))
+
+	if err := ps.SoftDeleteURLsByUser(uid, codes); err != nil {
+		t.Fatalf("SoftDeleteURLsByUser() err = %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unfulfilled expectations: %v", err)

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/zhebrikov/shortener/internal/auth"
 	"github.com/zhebrikov/shortener/internal/service"
 	"github.com/zhebrikov/shortener/internal/storage"
 )
@@ -52,6 +53,7 @@ func CreateLinkBatch(
 
 	response := make([]BatchResponseItem, 0, len(input))
 	seenInBatch := make(map[string]string)
+	userID, _ := auth.UserIDFromContext(r.Context())
 
 	for _, item := range input {
 		originalURL := strings.TrimSpace(item.OriginalURL)
@@ -75,6 +77,7 @@ func CreateLinkBatch(
 				UUID:        0,
 				ShortURL:    shortURL,
 				OriginalURL: originalURL,
+				UserID:      userID,
 			}
 			err = store.WriteStorage(newRecord)
 			if err != nil {

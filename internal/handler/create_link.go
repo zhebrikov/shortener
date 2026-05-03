@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/zhebrikov/shortener/internal/auth"
 	"github.com/zhebrikov/shortener/internal/service"
 	"github.com/zhebrikov/shortener/internal/storage"
 )
@@ -42,10 +43,12 @@ func CreateLink(w http.ResponseWriter, r *http.Request, shortener *service.Short
 		lastLinkUUID = links[len(links)-1].UUID
 	}
 
+	userID, _ := auth.UserIDFromContext(r.Context())
 	newRecord := storage.Link{
 		UUID:        lastLinkUUID + 1,
 		ShortURL:    shortURL,
 		OriginalURL: originalURL,
+		UserID:      userID,
 	}
 
 	if err := store.WriteStorage(newRecord); err != nil {
