@@ -18,7 +18,7 @@ func TestPostgresRegisterUserOK(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectQuery(`INSERT INTO gophermart_users`).
+	mock.ExpectQuery(`INSERT INTO gophermart_x_users`).
 		WithArgs("alice", "hash").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("11111111-1111-1111-1111-111111111111"))
 
@@ -42,7 +42,7 @@ func TestPostgresRegisterUserDuplicate(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectQuery(`INSERT INTO gophermart_users`).
+	mock.ExpectQuery(`INSERT INTO gophermart_x_users`).
 		WithArgs("alice", "hash").
 		WillReturnError(&pq.Error{Code: pgerrcode.UniqueViolation})
 

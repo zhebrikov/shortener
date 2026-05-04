@@ -16,7 +16,7 @@ func TestPostgresRegisterUserDBError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	mock.ExpectQuery(`INSERT INTO gophermart_users`).
+	mock.ExpectQuery(`INSERT INTO gophermart_x_users`).
 		WithArgs("a", "h").
 		WillReturnError(errors.New("db down"))
 
