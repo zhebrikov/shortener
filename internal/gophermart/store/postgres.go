@@ -24,7 +24,7 @@ func NewPostgres(db *sql.DB) *Postgres {
 func (p *Postgres) RegisterUser(ctx context.Context, login, passwordHash string) (string, error) {
 	var id string
 	err := p.db.QueryRowContext(ctx,
-		`INSERT INTO gophermart_x_users (login, password_hash) VALUES ($1, $2) RETURNING id::text`,
+		`INSERT INTO gophermart_users (login, password_hash) VALUES ($1, $2) RETURNING id::text`,
 		login, passwordHash,
 	).Scan(&id)
 	if err != nil {
@@ -40,7 +40,7 @@ func (p *Postgres) RegisterUser(ctx context.Context, login, passwordHash string)
 // GetUserByLogin implements Storer.
 func (p *Postgres) GetUserByLogin(ctx context.Context, login string) (userID, passwordHash string, err error) {
 	err = p.db.QueryRowContext(ctx,
-		`SELECT id::text, password_hash FROM gophermart_x_users WHERE login = $1`,
+		`SELECT id::text, password_hash FROM gophermart_users WHERE login = $1`,
 		login,
 	).Scan(&userID, &passwordHash)
 	return userID, passwordHash, err
