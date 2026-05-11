@@ -3,26 +3,26 @@ package handler
 import (
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/zhebrikov/shortener/internal/middleware"
 )
 
-// NewRouter returns the full chi router for the Gophermart service.
+// NewRouter returns the HTTP mux for the Gophermart service.
 func NewRouter(api *API) http.Handler {
-	r := chi.NewRouter()
-	r.Use(middleware.Gzip)
+	mux := http.NewServeMux()
+	auth := AuthMiddleware(api.Secret)
+	withAuth := func(h http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			auth(h).ServeHTTP(w, r)
+		}
+	}
 
-	r.Post("/api/user/register", api.Register)
-	r.Post("/api/user/login", api.Login)
+	mux.HandleFunc("POST /api/user/register", api.Register)
+	mux.HandleFunc("POST /api/user/login", api.Login)
+	mux.HandleFunc("POST /api/user/orders", withAuth(http.HandlerFunc(api.UploadOrder)))
+	mux.HandleFunc("GET /api/user/orders", withAuth(http.HandlerFunc(api.ListOrders)))
+	mux.HandleFunc("GET /api/user/balance", withAuth(http.HandlerFunc(api.Balance)))
+	mux.HandleFunc("POST /api/user/balance/withdraw", withAuth(http.HandlerFunc(api.Withdraw)))
+	mux.HandleFunc("GET /api/user/withdrawals", withAuth(http.HandlerFunc(api.ListWithdrawals)))
 
-	r.Group(func(r chi.Router) {
-		r.Use(AuthMiddleware(api.Secret))
-		r.Post("/api/user/orders", api.UploadOrder)
-		r.Get("/api/user/orders", api.ListOrders)
-		r.Get("/api/user/balance", api.Balance)
-		r.Post("/api/user/balance/withdraw", api.Withdraw)
-		r.Get("/api/user/withdrawals", api.ListWithdrawals)
-	})
-
-	return r
+	return middleware.Gzip(mux)
 }

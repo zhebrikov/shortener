@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"iter"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -27,7 +28,9 @@ func (smokeStore) GetUserByLogin(context.Context, string) (string, string, error
 func (smokeStore) UploadOrder(context.Context, string, string) (store.OrderUploadResult, error) {
 	return store.UploadAccepted, errors.New("noop")
 }
-func (smokeStore) ListUserOrders(context.Context, string) ([]store.OrderRow, error) { return nil, nil }
+func (smokeStore) ListUserOrders(context.Context, string) iter.Seq2[store.OrderRow, error] {
+	return func(yield func(store.OrderRow, error) bool) {}
+}
 func (smokeStore) Balance(context.Context, string) (float64, float64, error)        { return 0, 0, nil }
 func (smokeStore) Withdraw(context.Context, string, string, float64) error          { return nil }
 func (smokeStore) ListWithdrawals(context.Context, string) ([]store.WithdrawalRow, error) {

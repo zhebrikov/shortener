@@ -13,12 +13,16 @@ import (
 
 // AccrualPoller periodically synchronizes pending orders with the accrual HTTP API.
 type AccrualPoller struct {
-	Store  store.Storer
+	Store  store.AccrualStore
 	Client *accrual.Client
 	// Interval between polling rounds when idle.
 	Interval time.Duration
 	// Batch is the maximum number of orders to inspect per tick.
 	Batch int
+	// Sleep blocks for the given duration after the accrual API responds with
+	// 429 Too Many Requests. When nil [time.Sleep] is used; tests override it
+	// to avoid waiting on real timers.
+	Sleep func(time.Duration)
 }
 
 // Run blocks until ctx is cancelled, logging non-fatal errors to the standard logger.
@@ -62,9 +66,9 @@ func (p *AccrualPoller) processJob(ctx context.Context, j store.AccrualJob) erro
 	var tooMany *accrual.ErrTooManyRequests
 	if errors.As(err, &tooMany) {
 		if tooMany.RetryAfter > 0 {
-			sleepDur(tooMany.RetryAfter)
+			p.sleep(tooMany.RetryAfter)
 		} else {
-			sleepDur(time.Minute)
+			p.sleep(time.Minute)
 		}
 		return err
 	}
@@ -89,5 +93,10 @@ func mapAccrualResponse(info *accrual.OrderInfo) (localStatus string, accrualPtr
 	}
 }
 
-// sleepDur defaults to [time.Sleep]; tests swap it to avoid long sleeps on rate limits.
-var sleepDur = time.Sleep
+func (p *AccrualPoller) sleep(d time.Duration) {
+	if p.Sleep != nil {
+		p.Sleep(d)
+		return
+	}
+	time.Sleep(d)
+}

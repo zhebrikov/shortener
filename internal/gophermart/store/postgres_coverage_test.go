@@ -193,12 +193,15 @@ func TestPostgresListUserOrdersEmpty(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"number", "status", "accrual", "uploaded_at"}))
 
 	p := NewPostgres(db)
-	rows, err := p.ListUserOrders(context.Background(), uid)
-	if err != nil {
-		t.Fatal(err)
+	var got []OrderRow
+	for row, err := range p.ListUserOrders(context.Background(), uid) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, row)
 	}
-	if len(rows) != 0 {
-		t.Fatalf("len %d", len(rows))
+	if len(got) != 0 {
+		t.Fatalf("len %d", len(got))
 	}
 }
 
@@ -216,12 +219,15 @@ func TestPostgresListUserOrdersWithAccrual(t *testing.T) {
 			AddRow("1", "PROCESSED", 10.5, ts))
 
 	p := NewPostgres(db)
-	rows, err := p.ListUserOrders(context.Background(), uid)
-	if err != nil {
-		t.Fatal(err)
+	var got []OrderRow
+	for row, err := range p.ListUserOrders(context.Background(), uid) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, row)
 	}
-	if len(rows) != 1 || rows[0].Number != "1" || rows[0].Accrual == nil || *rows[0].Accrual != 10.5 {
-		t.Fatalf("%+v", rows)
+	if len(got) != 1 || got[0].Number != "1" || got[0].Accrual == nil || *got[0].Accrual != 10.5 {
+		t.Fatalf("%+v", got)
 	}
 }
 
@@ -242,9 +248,15 @@ func TestPostgresListUserOrdersScanError(t *testing.T) {
 		WillReturnRows(rows)
 
 	p := NewPostgres(db)
-	_, err = p.ListUserOrders(context.Background(), uid)
-	if err == nil || err.Error() != "scan" {
-		t.Fatalf("got %v", err)
+	var iterErr error
+	for _, err := range p.ListUserOrders(context.Background(), uid) {
+		if err != nil {
+			iterErr = err
+			break
+		}
+	}
+	if iterErr == nil || iterErr.Error() != "scan" {
+		t.Fatalf("got %v", iterErr)
 	}
 }
 
@@ -265,9 +277,15 @@ func TestPostgresListUserOrdersRowsErr(t *testing.T) {
 		WillReturnRows(rows)
 
 	p := NewPostgres(db)
-	_, err = p.ListUserOrders(context.Background(), uid)
-	if err == nil || err.Error() != "rows err" {
-		t.Fatalf("got %v", err)
+	var iterErr error
+	for _, err := range p.ListUserOrders(context.Background(), uid) {
+		if err != nil {
+			iterErr = err
+			break
+		}
+	}
+	if iterErr == nil || iterErr.Error() != "rows err" {
+		t.Fatalf("got %v", iterErr)
 	}
 }
 
@@ -279,9 +297,15 @@ func TestPostgresListUserOrdersQueryError(t *testing.T) {
 	defer db.Close()
 	mock.ExpectQuery(`SELECT number, status, accrual, uploaded_at`).WillReturnError(errors.New("q"))
 	p := NewPostgres(db)
-	_, err = p.ListUserOrders(context.Background(), "550e8400-e29b-41d4-a716-446655440000")
-	if err == nil || err.Error() != "q" {
-		t.Fatalf("got %v", err)
+	var iterErr error
+	for _, err := range p.ListUserOrders(context.Background(), "550e8400-e29b-41d4-a716-446655440000") {
+		if err != nil {
+			iterErr = err
+			break
+		}
+	}
+	if iterErr == nil || iterErr.Error() != "q" {
+		t.Fatalf("got %v", iterErr)
 	}
 }
 

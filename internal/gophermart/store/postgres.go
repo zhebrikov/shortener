@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"iter"
 
 	"github.com/jackc/pgerrcode"
 	"github.com/lib/pq"
@@ -89,33 +90,43 @@ func (p *Postgres) UploadOrder(ctx context.Context, userID, number string) (Orde
 }
 
 // ListUserOrders implements Storer.
-func (p *Postgres) ListUserOrders(ctx context.Context, userID string) ([]OrderRow, error) {
-	rows, err := p.db.QueryContext(ctx, `
+func (p *Postgres) ListUserOrders(ctx context.Context, userID string) iter.Seq2[OrderRow, error] {
+	return func(yield func(OrderRow, error) bool) {
+		rows, err := p.db.QueryContext(ctx, `
 		SELECT number, status, accrual, uploaded_at
 		FROM gophermart_orders
 		WHERE user_id = $1::uuid
 		ORDER BY uploaded_at DESC`,
-		userID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+			userID,
+		)
+		if err != nil {
+			var z OrderRow
+			yield(z, err)
+			return
+		}
+		defer rows.Close()
 
-	var out []OrderRow
-	for rows.Next() {
-		var r OrderRow
-		var acc sql.NullFloat64
-		if err := rows.Scan(&r.Number, &r.Status, &acc, &r.UploadedAt); err != nil {
-			return nil, err
+		for rows.Next() {
+			var r OrderRow
+			var acc sql.NullFloat64
+			if err := rows.Scan(&r.Number, &r.Status, &acc, &r.UploadedAt); err != nil {
+				var z OrderRow
+				yield(z, err)
+				return
+			}
+			if acc.Valid {
+				v := acc.Float64
+				r.Accrual = &v
+			}
+			if !yield(r, nil) {
+				return
+			}
 		}
-		if acc.Valid {
-			v := acc.Float64
-			r.Accrual = &v
+		if err := rows.Err(); err != nil {
+			var z OrderRow
+			yield(z, err)
 		}
-		out = append(out, r)
 	}
-	return out, rows.Err()
 }
 
 // Balance implements Storer.

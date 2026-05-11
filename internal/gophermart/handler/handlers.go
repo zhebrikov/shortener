@@ -14,13 +14,21 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// generatePasswordHash is swapped in tests to cover bcrypt failure paths.
-var generatePasswordHash = bcrypt.GenerateFromPassword
-
 // API wires HTTP handlers to a Storer and JWT secret.
 type API struct {
 	Store  store.Storer
 	Secret string
+	// HashPassword produces a bcrypt hash for a new user's password. When nil
+	// [bcrypt.GenerateFromPassword] is used; tests override it to exercise
+	// hashing failure paths.
+	HashPassword func(password []byte, cost int) ([]byte, error)
+}
+
+func (a *API) hashPassword(password []byte, cost int) ([]byte, error) {
+	if a.HashPassword != nil {
+		return a.HashPassword(password, cost)
+	}
+	return bcrypt.GenerateFromPassword(password, cost)
 }
 
 type credsBody struct {
@@ -45,7 +53,7 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	hash, err := generatePasswordHash([]byte(body.Password), bcrypt.DefaultCost)
+	hash, err := a.hashPassword([]byte(body.Password), bcrypt.DefaultCost)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -147,23 +155,22 @@ func (a *API) ListOrders(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	rows, err := a.Store.ListUserOrders(r.Context(), uid)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	if len(rows) == 0 {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	out := make([]orderResp, 0, len(rows))
-	for _, row := range rows {
+	out := make([]orderResp, 0)
+	for row, err := range a.Store.ListUserOrders(r.Context(), uid) {
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
 		out = append(out, orderResp{
 			Number:     row.Number,
 			Status:     row.Status,
 			Accrual:    row.Accrual,
 			UploadedAt: row.UploadedAt.Format(time.RFC3339),
 		})
+	}
+	if len(out) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)

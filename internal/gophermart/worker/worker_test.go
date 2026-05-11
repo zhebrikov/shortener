@@ -46,23 +46,6 @@ type stubStore struct {
 	syncErr   error
 }
 
-func (s *stubStore) RegisterUser(context.Context, string, string) (string, error) {
-	panic("RegisterUser")
-}
-func (s *stubStore) GetUserByLogin(context.Context, string) (string, string, error) {
-	panic("GetUserByLogin")
-}
-func (s *stubStore) UploadOrder(context.Context, string, string) (store.OrderUploadResult, error) {
-	panic("UploadOrder")
-}
-func (s *stubStore) ListUserOrders(context.Context, string) ([]store.OrderRow, error) {
-	panic("ListUserOrders")
-}
-func (s *stubStore) Balance(context.Context, string) (float64, float64, error) { panic("Balance") }
-func (s *stubStore) Withdraw(context.Context, string, string, float64) error   { panic("Withdraw") }
-func (s *stubStore) ListWithdrawals(context.Context, string) ([]store.WithdrawalRow, error) {
-	panic("ListWithdrawals")
-}
 func (s *stubStore) PendingAccrualJobs(context.Context, int) ([]store.AccrualJob, error) {
 	return s.jobs, s.jobsErr
 }
@@ -127,12 +110,13 @@ func TestProcessJob_rateLimitedZeroRetry(t *testing.T) {
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	defer srv.Close()
-	old := sleepDur
-	sleepDur = func(time.Duration) {}
-	defer func() { sleepDur = old }()
 
 	st := &stubStore{}
-	p := &AccrualPoller{Store: st, Client: accrual.NewClient(srv.URL, srv.Client())}
+	p := &AccrualPoller{
+		Store:  st,
+		Client: accrual.NewClient(srv.URL, srv.Client()),
+		Sleep:  func(time.Duration) {},
+	}
 	err := p.processJob(context.Background(), store.AccrualJob{ID: 1, Number: "1"})
 	if err == nil {
 		t.Fatal("expected error")

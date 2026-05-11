@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"iter"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -25,8 +26,8 @@ func (panicStore) GetUserByLogin(context.Context, string) (string, string, error
 func (panicStore) UploadOrder(context.Context, string, string) (store.OrderUploadResult, error) {
 	panic("UploadOrder")
 }
-func (panicStore) ListUserOrders(context.Context, string) ([]store.OrderRow, error) {
-	panic("ListUserOrders")
+func (panicStore) ListUserOrders(context.Context, string) iter.Seq2[store.OrderRow, error] {
+	return func(yield func(store.OrderRow, error) bool) { panic("ListUserOrders") }
 }
 func (panicStore) Balance(context.Context, string) (float64, float64, error) { panic("Balance") }
 func (panicStore) Withdraw(context.Context, string, string, float64) error   { panic("Withdraw") }

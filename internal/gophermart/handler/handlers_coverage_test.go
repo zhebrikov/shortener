@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"iter"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -49,11 +50,11 @@ func TestAPIRegister_emptyFields(t *testing.T) {
 }
 
 func TestAPIRegister_bcryptError(t *testing.T) {
-	old := generatePasswordHash
-	generatePasswordHash = func([]byte, int) ([]byte, error) { return nil, errors.New("bcrypt") }
-	defer func() { generatePasswordHash = old }()
-
-	api := &API{Store: regMock{id: "x"}, Secret: "secret-key-32bytes-minimum-length!"}
+	api := &API{
+		Store:        regMock{id: "x"},
+		Secret:       "secret-key-32bytes-minimum-length!",
+		HashPassword: func([]byte, int) ([]byte, error) { return nil, errors.New("bcrypt") },
+	}
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"login":"a","password":"b"}`))
 	rec := httptest.NewRecorder()
 	api.Register(rec, req)
@@ -205,8 +206,21 @@ type listOrdersMock struct {
 	err  error
 }
 
-func (m listOrdersMock) ListUserOrders(ctx context.Context, uid string) ([]store.OrderRow, error) {
-	return m.rows, m.err
+func (m listOrdersMock) ListUserOrders(ctx context.Context, uid string) iter.Seq2[store.OrderRow, error] {
+	_ = ctx
+	_ = uid
+	return func(yield func(store.OrderRow, error) bool) {
+		if m.err != nil {
+			var z store.OrderRow
+			yield(z, m.err)
+			return
+		}
+		for _, r := range m.rows {
+			if !yield(r, nil) {
+				return
+			}
+		}
+	}
 }
 
 func TestAPIListOrders_unauthorized(t *testing.T) {
