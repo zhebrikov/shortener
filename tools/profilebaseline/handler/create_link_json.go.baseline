@@ -35,8 +35,7 @@ func CreateLinkJSON(
 	}
 
 	var input Input
-	err = json.Unmarshal(body, &input)
-	if err != nil {
+	if err = json.Unmarshal(body, &input); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -48,23 +47,27 @@ func CreateLinkJSON(
 		return
 	}
 
-	nextUUID, err := store.NextLinkUUID()
+	links, err := store.ReadStorage()
 	if err != nil {
-		log.Printf("CreateLinkJSON: store.NextLinkUUID: %v", err)
+		log.Printf("CreateLinkJSON: store.ReadStorage: %v", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 
+	lastLinkUUID := 0
+	if len(links) > 0 {
+		lastLinkUUID = links[len(links)-1].UUID
+	}
+
 	userID, _ := auth.UserIDFromContext(r.Context())
 	newRecord := storage.Link{
-		UUID:        nextUUID,
+		UUID:        lastLinkUUID + 1,
 		ShortURL:    shortURL,
 		OriginalURL: input.URL,
 		UserID:      userID,
 	}
 
-	err = store.WriteStorage(newRecord)
-	if err != nil {
+	if err = store.WriteStorage(newRecord); err != nil {
 		if errors.Is(err, storage.ErrDuplicateURL) {
 			existingShort, getErr := store.GetShortURLByOriginalURL(input.URL)
 			if getErr != nil {
@@ -85,6 +88,11 @@ func CreateLinkJSON(
 
 	publishAudit(auditPub, r, audit.ActionShorten, input.URL)
 	w.Header().Set("Content-Type", "application/json")
+	resultJSON, err := json.Marshal(Output{Result: shortURL})
+	if err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(Output{Result: shortURL})
+	w.Write(resultJSON)
 }

@@ -9,12 +9,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/zhebrikov/shortener/internal/asyncdelete"
+	"github.com/zhebrikov/shortener/internal/audit"
 	"github.com/zhebrikov/shortener/internal/auth"
 	"github.com/zhebrikov/shortener/internal/db/postgresql"
 	"github.com/zhebrikov/shortener/internal/handler"
@@ -32,6 +34,8 @@ type Config struct {
 	DatabaseDsn   string
 	MigrationPath string
 	SecretKey     string
+	AuditFile     string
+	AuditURL      string
 }
 
 // getConfig возвращает конфиг: переменные окружения имеют приоритет, иначе используются значения по умолчанию (defaults).
@@ -60,6 +64,14 @@ func getConfig(defaults Config) (Config, error) {
 	if !ok || secretKey == "" {
 		secretKey = defaults.SecretKey
 	}
+	auditFile, ok := os.LookupEnv("AUDIT_FILE")
+	if !ok || auditFile == "" {
+		auditFile = defaults.AuditFile
+	}
+	auditURL, ok := os.LookupEnv("AUDIT_URL")
+	if !ok || auditURL == "" {
+		auditURL = defaults.AuditURL
+	}
 	return Config{
 		ServerAddress: serverAddress,
 		BaseURL:       baseURL,
@@ -67,6 +79,8 @@ func getConfig(defaults Config) (Config, error) {
 		DatabaseDsn:   databaseDsn,
 		MigrationPath: migrationPath,
 		SecretKey:     secretKey,
+		AuditFile:     auditFile,
+		AuditURL:      auditURL,
 	}, nil
 }
 
@@ -79,64 +93,34 @@ func portFromServerAddress(serverAddress string) (string, error) {
 	return serverAddress[idx:], nil
 }
 
-func main() {
-	serverAddrFlag := flag.String("a", "localhost:8080", "address of the HTTP server")
-	baseURLFlag := flag.String("b", "localhost:8080", "base URL for shortened links")
-	fileStorageFlag := flag.String("f", "", "file to store the links (empty = in-memory when no DB)")
-	databaseDsnFlag := flag.String("d", "", "database DSN")
-	migrationPathFlag := flag.String("m", "migrations", "path to the migrations")
-	secretKeyFlag := flag.String("k", "", "secret key for signed user cookie (or SECRET_KEY env)")
-	flag.Parse()
+// app собирает HTTP-приложение из конфигурации (для main и тестов).
+type app struct {
+	Handler http.Handler
+	Port    string
+	Log     *zap.Logger
+}
 
-	cfg, err := getConfig(Config{
-		ServerAddress: *serverAddrFlag,
-		BaseURL:       *baseURLFlag,
-		FileStorage:   *fileStorageFlag,
-		DatabaseDsn:   *databaseDsnFlag,
-		MigrationPath: *migrationPathFlag,
-		SecretKey:     *secretKeyFlag,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
+func newApp(cfg Config) (*app, error) {
 	secretKey := cfg.SecretKey
 	if secretKey == "" {
 		secretKey = "dev-insecure-secret-change-me"
 	}
 
-	// Выбор хранилища: DATABASE_DSN/-d → файл (FILE_STORAGE_PATH/-f) → память.
 	var store storage.LinkStore
 	var db *sql.DB
 	if cfg.DatabaseDsn != "" {
 		var errConn error
-		db, errConn = postgresql.Connection(cfg.DatabaseDsn)
+		db, errConn = dbConnect(cfg.DatabaseDsn)
 		if errConn != nil {
-			log.Fatal(errConn)
+			return nil, errConn
 		}
-		// Run migrations so user tables exist (required for iteration11 / DB inspect tests).
 		migrationsPath := cfg.MigrationPath
 		if migrationsPath == "" {
 			migrationsPath = "migrations"
 		}
-		if abs, err := filepath.Abs(migrationsPath); err == nil {
-			migrationsPath = abs
+		if errMig := runMigrate(migrationsPath, cfg.DatabaseDsn); errMig != nil {
+			return nil, errMig
 		}
-		m, errMig := migrate.New("file://"+migrationsPath, cfg.DatabaseDsn)
-		if errMig != nil {
-			migrationsPath = "../migrations"
-			if abs, err := filepath.Abs(migrationsPath); err == nil {
-				migrationsPath = abs
-			}
-			m, errMig = migrate.New("file://"+migrationsPath, cfg.DatabaseDsn)
-			if errMig != nil {
-				log.Fatal(errMig)
-			}
-		}
-		if errUp := m.Up(); errUp != nil && errUp != migrate.ErrNoChange {
-			_, _ = m.Close()
-			log.Fatal(errUp)
-		}
-		_, _ = m.Close()
 		store = storage.NewPostgresStorage(db)
 	} else if cfg.FileStorage != "" {
 		store = storage.NewStorage(cfg.FileStorage)
@@ -146,17 +130,27 @@ func main() {
 
 	port, err := portFromServerAddress(cfg.ServerAddress)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	zapLog, err := logger.New("info")
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	shortener := service.NewShortener(cfg.BaseURL)
 	deleter := asyncdelete.NewWorker(store)
-	h := handler.NewShortenerHandler(shortener, store, deleter)
+
+	var auditObservers []audit.Observer
+	if cfg.AuditFile != "" {
+		auditObservers = append(auditObservers, audit.NewFileObserver(cfg.AuditFile))
+	}
+	if cfg.AuditURL != "" {
+		auditObservers = append(auditObservers, audit.NewHTTPObserver(cfg.AuditURL, &http.Client{Timeout: 5 * time.Second}))
+	}
+	auditPub := audit.NewPublisher(auditObservers...)
+
+	h := handler.NewShortenerHandler(shortener, store, deleter, auditPub)
 
 	r := chi.NewRouter()
 	r.Use(logger.Middleware(zapLog))
@@ -172,10 +166,84 @@ func main() {
 	})
 	r.Delete("/api/user/urls", h.DeleteUserURLs)
 
-	zapLog.Info("server started", zap.String("address", "http://localhost"+port))
+	return &app{Handler: r, Port: port, Log: zapLog}, nil
+}
 
-	err = http.ListenAndServe(port, r)
-	if err != nil {
-		log.Fatal(err)
+func run(args []string, listen func(string, http.Handler) error) error {
+	fs := flag.NewFlagSet("shortener", flag.ContinueOnError)
+	serverAddrFlag := fs.String("a", "localhost:8080", "address of the HTTP server")
+	baseURLFlag := fs.String("b", "localhost:8080", "base URL for shortened links")
+	fileStorageFlag := fs.String("f", "", "file to store the links (empty = in-memory when no DB)")
+	databaseDsnFlag := fs.String("d", "", "database DSN")
+	migrationPathFlag := fs.String("m", "migrations", "path to the migrations")
+	secretKeyFlag := fs.String("k", "", "secret key for signed user cookie (or SECRET_KEY env)")
+	auditFileFlag := fs.String("audit-file", "", "append-only audit log file path (or AUDIT_FILE env; empty = disabled)")
+	auditURLFlag := fs.String("audit-url", "", "remote audit sink POST URL (or AUDIT_URL env; empty = disabled)")
+	if err := fs.Parse(args); err != nil {
+		return err
 	}
+
+	cfg, err := getConfig(Config{
+		ServerAddress: *serverAddrFlag,
+		BaseURL:       *baseURLFlag,
+		FileStorage:   *fileStorageFlag,
+		DatabaseDsn:   *databaseDsnFlag,
+		MigrationPath: *migrationPathFlag,
+		SecretKey:     *secretKeyFlag,
+		AuditFile:     *auditFileFlag,
+		AuditURL:      *auditURLFlag,
+	})
+	if err != nil {
+		return err
+	}
+
+	application, err := newApp(cfg)
+	if err != nil {
+		return err
+	}
+
+	application.Log.Info("server started", zap.String("address", "http://localhost"+application.Port))
+	return listen(application.Port, application.Handler)
+}
+
+// osExit, appListen и dbConnect подменяются в тестах.
+var (
+	osExit     = os.Exit
+	appListen  = http.ListenAndServe
+	dbConnect  = postgresql.Connection
+	runMigrate = runMigrations
+)
+
+func runMigrations(migrationsPath, dsn string) error {
+	if abs, err := filepath.Abs(migrationsPath); err == nil {
+		migrationsPath = abs
+	}
+	m, err := migrate.New("file://"+migrationsPath, dsn)
+	if err != nil {
+		migrationsPath = "../migrations"
+		if abs, err := filepath.Abs(migrationsPath); err == nil {
+			migrationsPath = abs
+		}
+		m, err = migrate.New("file://"+migrationsPath, dsn)
+		if err != nil {
+			return err
+		}
+	}
+	defer func() { _, _ = m.Close() }()
+	if errUp := m.Up(); errUp != nil && errUp != migrate.ErrNoChange {
+		return errUp
+	}
+	return nil
+}
+
+func main() {
+	osExit(exitCode(os.Args[1:], appListen))
+}
+
+func exitCode(args []string, listen func(string, http.Handler) error) int {
+	if err := run(args, listen); err != nil {
+		log.Print(err)
+		return 1
+	}
+	return 0
 }

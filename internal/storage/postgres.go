@@ -166,3 +166,37 @@ func (p *PostgresStorage) SoftDeleteURLsByUser(userID string, shortCodes []strin
 	`, userID, pq.Array(shortCodes))
 	return err
 }
+
+func (p *PostgresStorage) GetLinkByShortCode(shortCode string) (Link, error) {
+	if shortCode == "" {
+		return Link{}, ErrLinkNotFound
+	}
+	var url, short string
+	var userID sql.NullString
+	var isDeleted bool
+	err := p.db.QueryRow(
+		`SELECT url, short_url, user_id, is_deleted FROM links
+		 WHERE short_url = $1 OR short_url LIKE '%/' || $1`,
+		shortCode,
+	).Scan(&url, &short, &userID, &isDeleted)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Link{}, ErrLinkNotFound
+		}
+		return Link{}, err
+	}
+	uid := ""
+	if userID.Valid {
+		uid = userID.String
+	}
+	return Link{ShortURL: short, OriginalURL: url, UserID: uid, IsDeleted: isDeleted}, nil
+}
+
+func (p *PostgresStorage) NextLinkUUID() (int, error) {
+	var n int
+	err := p.db.QueryRow(`SELECT COALESCE(MAX(id), 0) + 1 FROM links`).Scan(&n)
+	if err != nil {
+		return 1, err
+	}
+	return n, nil
+}

@@ -12,6 +12,11 @@ import (
 // ErrDuplicateURL возвращается при попытке сохранить URL, который уже есть в хранилище (уникальное нарушение).
 var ErrDuplicateURL = errors.New("duplicate url")
 
+// ErrLinkNotFound возвращается, если ссылка с указанным shortCode не найдена.
+var ErrLinkNotFound = errors.New("link not found")
+
+var marshalStorageLinks = json.MarshalIndent
+
 // LinkStore — интерфейс хранилища ссылок (БД, файл или память).
 type LinkStore interface {
 	ReadStorage() ([]Link, error)
@@ -24,6 +29,10 @@ type LinkStore interface {
 	GetLinksByUserID(userID string) ([]Link, error)
 	// SoftDeleteURLsByUser помечает ссылки как удалённые (только принадлежащие userID).
 	SoftDeleteURLsByUser(userID string, shortCodes []string) error
+	// GetLinkByShortCode возвращает запись по коду из пути (суффикс short_url).
+	GetLinkByShortCode(shortCode string) (Link, error)
+	// NextLinkUUID возвращает UUID для следующей записи (1, если хранилище пустое).
+	NextLinkUUID() (int, error)
 }
 
 type Storage struct {
@@ -40,6 +49,14 @@ type Link struct {
 	OriginalURL string `json:"original_url"`
 	UserID      string `json:"user_id,omitempty"`
 	IsDeleted   bool   `json:"is_deleted,omitempty"`
+}
+
+// ShortCodeFromURL извлекает код из полного short URL (последний сегмент пути).
+func ShortCodeFromURL(shortURL string) string {
+	if i := strings.LastIndex(shortURL, "/"); i >= 0 {
+		return shortURL[i+1:]
+	}
+	return shortURL
 }
 
 // LinkMatchesShortCode проверяет, что shortCode совпадает с сохранённым значением short_url (полный URL или суффикс /code).
@@ -98,7 +115,7 @@ func (s *Storage) readStorageLocked() ([]Link, error) {
 
 // writeAllStorageLocked перезаписывает файл; вызывающий должен держать s.mu.
 func (s *Storage) writeAllStorageLocked(links []Link) error {
-	data, err := json.MarshalIndent(links, "", "  ")
+	data, err := marshalStorageLinks(links, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -186,4 +203,35 @@ func (s *Storage) SoftDeleteURLsByUser(userID string, shortCodes []string) error
 		return nil
 	}
 	return s.writeAllStorageLocked(links)
+}
+
+func (s *Storage) GetLinkByShortCode(shortCode string) (Link, error) {
+	if shortCode == "" {
+		return Link{}, ErrLinkNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	links, err := s.readStorageLocked()
+	if err != nil {
+		return Link{}, err
+	}
+	for _, l := range links {
+		if LinkMatchesShortCode(l.ShortURL, shortCode) {
+			return l, nil
+		}
+	}
+	return Link{}, ErrLinkNotFound
+}
+
+func (s *Storage) NextLinkUUID() (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	links, err := s.readStorageLocked()
+	if err != nil {
+		return 1, err
+	}
+	if len(links) == 0 {
+		return 1, nil
+	}
+	return links[len(links)-1].UUID + 1, nil
 }

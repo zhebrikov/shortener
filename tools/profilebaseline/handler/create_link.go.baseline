@@ -31,15 +31,20 @@ func CreateLink(w http.ResponseWriter, r *http.Request, shortener *service.Short
 		return
 	}
 
-	nextUUID, err := store.NextLinkUUID()
+	links, err := store.ReadStorage()
 	if err != nil {
 		http.Error(w, "Failed to read storage", http.StatusInternalServerError)
 		return
 	}
 
+	lastLinkUUID := 0
+	if len(links) > 0 {
+		lastLinkUUID = links[len(links)-1].UUID
+	}
+
 	userID, _ := auth.UserIDFromContext(r.Context())
 	newRecord := storage.Link{
-		UUID:        nextUUID,
+		UUID:        lastLinkUUID + 1,
 		ShortURL:    shortURL,
 		OriginalURL: originalURL,
 		UserID:      userID,

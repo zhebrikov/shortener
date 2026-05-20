@@ -5,6 +5,11 @@ import (
 	"os"
 )
 
+var (
+	writeSettingsFile = os.WriteFile
+	marshalSettings   = json.MarshalIndent
+)
+
 type Settings struct {
 	Port int    `json:"port"`
 	Host string `json:"host"`
@@ -13,12 +18,12 @@ type Settings struct {
 // Save сохраняет настройки в файле fname.
 func (settings Settings) Save(fname string) error {
 	// сериализуем структуру в JSON формат
-	data, err := json.MarshalIndent(settings, "", "   ")
+	data, err := marshalSettings(settings, "", "   ")
 	if err != nil {
 		return err
 	}
 	// сохраняем данные в файл
-	return os.WriteFile(fname, data, 0666)
+	return writeSettingsFile(fname, data, 0666)
 }
 
 func (settings *Settings) Load(fname string) error {

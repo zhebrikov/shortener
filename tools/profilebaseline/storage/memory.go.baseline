@@ -5,22 +5,16 @@ import (
 	"sync"
 )
 
-// MemoryStorage — хранилище ссылок в памяти.
+// MemoryStorage — хранилище ссылок в памяти (baseline: без индекса по shortCode).
 type MemoryStorage struct {
-	mu     sync.RWMutex
-	links  []Link
-	byCode map[string]int
+	mu    sync.RWMutex
+	links []Link
 }
 
-// Проверка, что *MemoryStorage реализует LinkStore.
 var _ LinkStore = (*MemoryStorage)(nil)
 
-// NewMemoryStorage создаёт хранилище в памяти.
 func NewMemoryStorage() *MemoryStorage {
-	return &MemoryStorage{
-		links:  make([]Link, 0),
-		byCode: make(map[string]int),
-	}
+	return &MemoryStorage{links: make([]Link, 0)}
 }
 
 func (m *MemoryStorage) ReadStorage() ([]Link, error) {
@@ -31,13 +25,6 @@ func (m *MemoryStorage) ReadStorage() ([]Link, error) {
 	return out, nil
 }
 
-func (m *MemoryStorage) indexLink(idx int, link Link) {
-	code := ShortCodeFromURL(link.ShortURL)
-	if code != "" {
-		m.byCode[code] = idx
-	}
-}
-
 func (m *MemoryStorage) WriteStorage(link Link) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -46,24 +33,17 @@ func (m *MemoryStorage) WriteStorage(link Link) error {
 			return ErrDuplicateURL
 		}
 	}
-	idx := len(m.links)
 	m.links = append(m.links, link)
-	m.indexLink(idx, link)
 	return nil
 }
 
-// WriteStorageBatch атомарно добавляет несколько ссылок под одной блокировкой.
 func (m *MemoryStorage) WriteStorageBatch(links []Link) error {
 	if len(links) == 0 {
 		return nil
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	base := len(m.links)
 	m.links = append(m.links, links...)
-	for i, link := range links {
-		m.indexLink(base+i, link)
-	}
 	return nil
 }
 
@@ -113,16 +93,13 @@ func (m *MemoryStorage) SoftDeleteURLsByUser(userID string, shortCodes []string)
 	return nil
 }
 
+// GetLinkByShortCode (baseline) читает и копирует всё хранилище на каждый запрос.
 func (m *MemoryStorage) GetLinkByShortCode(shortCode string) (Link, error) {
-	if shortCode == "" {
-		return Link{}, ErrLinkNotFound
+	links, err := m.ReadStorage()
+	if err != nil {
+		return Link{}, err
 	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if idx, ok := m.byCode[shortCode]; ok && idx < len(m.links) {
-		return m.links[idx], nil
-	}
-	for _, l := range m.links {
+	for _, l := range links {
 		if LinkMatchesShortCode(l.ShortURL, shortCode) {
 			return l, nil
 		}
@@ -130,11 +107,14 @@ func (m *MemoryStorage) GetLinkByShortCode(shortCode string) (Link, error) {
 	return Link{}, ErrLinkNotFound
 }
 
+// NextLinkUUID (baseline) читает и копирует всё хранилище.
 func (m *MemoryStorage) NextLinkUUID() (int, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if len(m.links) == 0 {
+	links, err := m.ReadStorage()
+	if err != nil {
+		return 0, err
+	}
+	if len(links) == 0 {
 		return 1, nil
 	}
-	return m.links[len(m.links)-1].UUID + 1, nil
+	return links[len(links)-1].UUID + 1, nil
 }

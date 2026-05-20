@@ -13,7 +13,7 @@ import (
 func TestNewShortenerHandler(t *testing.T) {
 	shortener := service.NewShortener("test:9090")
 	store := mustTempStorage(t, "[]")
-	h := NewShortenerHandler(shortener, store, nil)
+	h := NewShortenerHandler(shortener, store, nil, nil)
 	if h == nil {
 		t.Fatal("NewShortenerHandler returned nil")
 	}
@@ -42,11 +42,11 @@ func TestShortenerHandler_CreateLink(t *testing.T) {
 			wantBodyPrefix: "http://" + baseURL + "/",
 		},
 		{
-			name:        "POST без Content-Type — 400",
-			method:      http.MethodPost,
-			body:        []byte("https://example.com"),
-			storage:     "[]",
-			wantStatus:  http.StatusBadRequest,
+			name:       "POST без Content-Type — 400",
+			method:     http.MethodPost,
+			body:       []byte("https://example.com"),
+			storage:    "[]",
+			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:        "POST с пустым телом — 400",
@@ -60,7 +60,7 @@ func TestShortenerHandler_CreateLink(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := mustTempStorage(t, tt.storage)
-			h := NewShortenerHandler(shortener, store, nil)
+			h := NewShortenerHandler(shortener, store, nil, nil)
 			req := httptest.NewRequest(tt.method, "/", bytes.NewReader(tt.body))
 			if tt.contentType != "" {
 				req.Header.Set("Content-Type", tt.contentType)
@@ -89,12 +89,12 @@ func TestShortenerHandler_GetLink(t *testing.T) {
 	shortCode := shortURL[strings.LastIndex(shortURL, "/")+1:]
 
 	tests := []struct {
-		name        string
-		method      string
-		path        string
-		storage     string
-		wantStatus  int
-		wantLoc     string
+		name       string
+		method     string
+		path       string
+		storage    string
+		wantStatus int
+		wantLoc    string
 	}{
 		{
 			name:       "GET по существующему коду — 307 и Location",
@@ -129,7 +129,7 @@ func TestShortenerHandler_GetLink(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := mustTempStorage(t, tt.storage)
-			h := NewShortenerHandler(shortener, store, nil)
+			h := NewShortenerHandler(shortener, store, nil, nil)
 			req := httptest.NewRequest(tt.method, tt.path, nil)
 			rr := httptest.NewRecorder()
 
