@@ -18,6 +18,10 @@ var ErrLinkNotFound = errors.New("link not found")
 
 var marshalStorageLinks = json.MarshalIndent
 
+var createStorageFile = func(filename string) error {
+	return os.WriteFile(filename, []byte("[]"), 0644)
+}
+
 // LinkStore — интерфейс хранилища ссылок (БД, файл или память).
 type LinkStore interface {
 	// ReadStorage возвращает все сохранённые ссылки.
@@ -106,7 +110,7 @@ func (s *Storage) readStorageLocked() ([]Link, error) {
 	data, err := os.ReadFile(s.filename)
 	if err != nil {
 		if os.IsNotExist(err) {
-			if err := os.WriteFile(s.filename, []byte("[]"), 0644); err != nil {
+			if err := createStorageFile(s.filename); err != nil {
 				return nil, err
 			}
 			return []Link{}, nil

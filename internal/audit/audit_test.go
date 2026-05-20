@@ -201,12 +201,13 @@ func (closeErrWriter) Write(p []byte) (int, error) { return len(p), nil }
 func (closeErrWriter) Close() error                { return os.ErrInvalid }
 
 func TestFileObserver_OnAudit_readOnlyFileWriteError(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "readonly.log")
-	if err := os.WriteFile(path, []byte("existing\n"), 0444); err != nil {
-		t.Fatal(err)
+	old := auditAppender
+	auditAppender = func(string) (io.WriteCloser, error) {
+		return nil, os.ErrPermission
 	}
-	obs := NewFileObserver(path)
+	defer func() { auditAppender = old }()
+
+	obs := NewFileObserver(filepath.Join(t.TempDir(), "readonly.log"))
 	err := obs.OnAudit(context.Background(), Event{Ts: 1, Action: ActionShorten, URL: "https://a.com"})
 	if err == nil {
 		t.Fatal("expected error when audit file is not writable")

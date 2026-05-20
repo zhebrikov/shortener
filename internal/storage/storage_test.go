@@ -463,11 +463,11 @@ func TestStorage_writeAllStorageLocked_marshalError(t *testing.T) {
 }
 
 func TestStorage_ReadStorage_createFileError(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0500); err != nil {
-		t.Fatal(err)
-	}
-	s := NewStorage(filepath.Join(dir, "data.json"))
+	old := createStorageFile
+	createStorageFile = func(string) error { return os.ErrPermission }
+	defer func() { createStorageFile = old }()
+
+	s := NewStorage(filepath.Join(t.TempDir(), "data.json"))
 	if _, err := s.ReadStorage(); err == nil {
 		t.Fatal("expected error when cannot create storage file")
 	}
