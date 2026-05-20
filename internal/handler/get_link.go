@@ -9,6 +9,7 @@ import (
 	"github.com/zhebrikov/shortener/internal/storage"
 )
 
+// GetLink выполняет редирект на оригинальный URL по shortCode из пути запроса.
 func GetLink(
 	w http.ResponseWriter,
 	r *http.Request,

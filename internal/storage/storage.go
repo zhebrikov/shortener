@@ -1,3 +1,4 @@
+// Package storage определяет модель ссылки и реализации хранилища (файл, память, PostgreSQL).
 package storage
 
 import (
@@ -19,7 +20,9 @@ var marshalStorageLinks = json.MarshalIndent
 
 // LinkStore — интерфейс хранилища ссылок (БД, файл или память).
 type LinkStore interface {
+	// ReadStorage возвращает все сохранённые ссылки.
 	ReadStorage() ([]Link, error)
+	// WriteStorage сохраняет одну ссылку; при дубликате originalURL возвращает ErrDuplicateURL.
 	WriteStorage(link Link) error
 	// WriteStorageBatch сохраняет несколько ссылок атомарно (одна транзакция/один запрос).
 	WriteStorageBatch(links []Link) error
@@ -35,6 +38,7 @@ type LinkStore interface {
 	NextLinkUUID() (int, error)
 }
 
+// Storage хранит ссылки в JSON-файле на диске.
 type Storage struct {
 	mu       sync.Mutex
 	filename string
@@ -43,6 +47,7 @@ type Storage struct {
 // Проверка, что *Storage реализует LinkStore.
 var _ LinkStore = (*Storage)(nil)
 
+// Link — запись о сокращённой ссылке (оригинал, short URL, владелец, флаг удаления).
 type Link struct {
 	UUID        int    `json:"uuid"`
 	ShortURL    string `json:"short_url"`
@@ -67,16 +72,19 @@ func LinkMatchesShortCode(storedShortURL, shortCode string) bool {
 	return storedShortURL == shortCode || strings.HasSuffix(storedShortURL, "/"+shortCode)
 }
 
+// NewStorage создаёт файловое хранилище по пути filename.
 func NewStorage(filename string) *Storage {
 	return &Storage{filename: filename}
 }
 
+// ReadStorage читает все ссылки из файла.
 func (s *Storage) ReadStorage() ([]Link, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.readStorageLocked()
 }
 
+// WriteStorage дописывает ссылку в файл; дубликат originalURL даёт ErrDuplicateURL.
 func (s *Storage) WriteStorage(link Link) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -144,6 +152,7 @@ func (s *Storage) WriteStorageBatch(links []Link) error {
 	return s.writeAllStorageLocked(existing)
 }
 
+// GetShortURLByOriginalURL возвращает short URL по оригинальному адресу.
 func (s *Storage) GetShortURLByOriginalURL(originalURL string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -159,6 +168,7 @@ func (s *Storage) GetShortURLByOriginalURL(originalURL string) (string, error) {
 	return "", errors.New("url not found")
 }
 
+// GetLinksByUserID возвращает неудалённые ссылки пользователя.
 func (s *Storage) GetLinksByUserID(userID string) ([]Link, error) {
 	if userID == "" {
 		return nil, nil
@@ -176,6 +186,7 @@ func (s *Storage) GetLinksByUserID(userID string) ([]Link, error) {
 	return out, nil
 }
 
+// SoftDeleteURLsByUser помечает ссылки пользователя как удалённые.
 func (s *Storage) SoftDeleteURLsByUser(userID string, shortCodes []string) error {
 	if userID == "" || len(shortCodes) == 0 {
 		return nil
@@ -205,6 +216,7 @@ func (s *Storage) SoftDeleteURLsByUser(userID string, shortCodes []string) error
 	return s.writeAllStorageLocked(links)
 }
 
+// GetLinkByShortCode возвращает запись по коду из пути или ErrLinkNotFound.
 func (s *Storage) GetLinkByShortCode(shortCode string) (Link, error) {
 	if shortCode == "" {
 		return Link{}, ErrLinkNotFound
@@ -223,6 +235,7 @@ func (s *Storage) GetLinkByShortCode(shortCode string) (Link, error) {
 	return Link{}, ErrLinkNotFound
 }
 
+// NextLinkUUID возвращает следующий порядковый UUID для новой записи.
 func (s *Storage) NextLinkUUID() (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -10,6 +10,7 @@ const defaultAuditTimeout = 10 * time.Second
 
 // Observer — приёмник событий аудита (паттерн «Наблюдатель»).
 type Observer interface {
+	// OnAudit обрабатывает одно событие; ошибка логируется издателем, но не прерывает других наблюдателей.
 	OnAudit(ctx context.Context, ev Event) error
 }
 

@@ -1,3 +1,4 @@
+// Package service содержит бизнес-логику сокращения и разрешения ссылок.
 package service
 
 import (
@@ -13,12 +14,14 @@ import (
 	"github.com/zhebrikov/shortener/internal/storage"
 )
 
+// Shortener генерирует короткие коды и полные short URL на основе baseURL.
 type Shortener struct {
 	mu       sync.Mutex
 	repoLink map[string]string
 	baseURL  string
 }
 
+// NewShortener создаёт сервис с заданным базовым адресом для сокращённых ссылок.
 func NewShortener(baseURL string) *Shortener {
 	return &Shortener{
 		repoLink: make(map[string]string),
@@ -48,6 +51,7 @@ func shortCodeFromHash(hash [20]byte) string {
 	return string(buf[:])
 }
 
+// CreateLink возвращает полный short URL для originalURL (коллизии хеша разрешаются суффиксом _N).
 func (s *Shortener) CreateLink(originalURL string) (string, error) {
 	input := originalURL
 	var suffix strings.Builder

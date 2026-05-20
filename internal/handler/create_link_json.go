@@ -13,14 +13,17 @@ import (
 	"github.com/zhebrikov/shortener/internal/storage"
 )
 
+// Input — тело запроса POST /api/shorten.
 type Input struct {
 	URL string `json:"url"`
 }
 
+// Output — ответ POST /api/shorten.
 type Output struct {
 	Result string `json:"result"`
 }
 
+// CreateLinkJSON сокращает URL из JSON-тела запроса и сохраняет запись в хранилище.
 func CreateLinkJSON(
 	w http.ResponseWriter,
 	r *http.Request,

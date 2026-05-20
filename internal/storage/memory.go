@@ -23,6 +23,7 @@ func NewMemoryStorage() *MemoryStorage {
 	}
 }
 
+// ReadStorage возвращает копию всех ссылок из памяти.
 func (m *MemoryStorage) ReadStorage() ([]Link, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -38,6 +39,7 @@ func (m *MemoryStorage) indexLink(idx int, link Link) {
 	}
 }
 
+// WriteStorage добавляет ссылку; дубликат originalURL даёт ErrDuplicateURL.
 func (m *MemoryStorage) WriteStorage(link Link) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -67,6 +69,7 @@ func (m *MemoryStorage) WriteStorageBatch(links []Link) error {
 	return nil
 }
 
+// GetShortURLByOriginalURL возвращает short URL по оригинальному адресу.
 func (m *MemoryStorage) GetShortURLByOriginalURL(originalURL string) (string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -78,6 +81,7 @@ func (m *MemoryStorage) GetShortURLByOriginalURL(originalURL string) (string, er
 	return "", errors.New("url not found")
 }
 
+// GetLinksByUserID возвращает неудалённые ссылки пользователя.
 func (m *MemoryStorage) GetLinksByUserID(userID string) ([]Link, error) {
 	if userID == "" {
 		return nil, nil
@@ -93,6 +97,7 @@ func (m *MemoryStorage) GetLinksByUserID(userID string) ([]Link, error) {
 	return out, nil
 }
 
+// SoftDeleteURLsByUser помечает ссылки пользователя как удалённые.
 func (m *MemoryStorage) SoftDeleteURLsByUser(userID string, shortCodes []string) error {
 	if userID == "" || len(shortCodes) == 0 {
 		return nil
@@ -113,6 +118,7 @@ func (m *MemoryStorage) SoftDeleteURLsByUser(userID string, shortCodes []string)
 	return nil
 }
 
+// GetLinkByShortCode возвращает запись по коду или ErrLinkNotFound.
 func (m *MemoryStorage) GetLinkByShortCode(shortCode string) (Link, error) {
 	if shortCode == "" {
 		return Link{}, ErrLinkNotFound
@@ -130,6 +136,7 @@ func (m *MemoryStorage) GetLinkByShortCode(shortCode string) (Link, error) {
 	return Link{}, ErrLinkNotFound
 }
 
+// NextLinkUUID возвращает следующий порядковый UUID для новой записи.
 func (m *MemoryStorage) NextLinkUUID() (int, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

@@ -11,6 +11,7 @@ import (
 	"github.com/zhebrikov/shortener/internal/storage"
 )
 
+// CreateLink сокращает URL из тела запроса (Content-Type: text/plain) и сохраняет запись в хранилище.
 func CreateLink(w http.ResponseWriter, r *http.Request, shortener *service.Shortener, store storage.LinkStore, auditPub *audit.Publisher) {
 	if r.Header.Get("Content-Type") != "text/plain" {
 		http.Error(w, "Content-Type must be text/plain", http.StatusBadRequest)

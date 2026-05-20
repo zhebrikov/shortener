@@ -1,3 +1,4 @@
+// Package settings загружает и сохраняет настройки приложения в JSON-файле.
 package settings
 
 import (
@@ -10,6 +11,7 @@ var (
 	marshalSettings   = json.MarshalIndent
 )
 
+// Settings — хост и порт HTTP-сервера.
 type Settings struct {
 	Port int    `json:"port"`
 	Host string `json:"host"`
@@ -26,6 +28,7 @@ func (settings Settings) Save(fname string) error {
 	return writeSettingsFile(fname, data, 0666)
 }
 
+// Load читает настройки из JSON-файла fname.
 func (settings *Settings) Load(fname string) error {
 	data, err := os.ReadFile(fname)
 	if err != nil {
