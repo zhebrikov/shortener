@@ -845,7 +845,7 @@ func TestPostgresStorage_NextLinkUUID_error(t *testing.T) {
 	defer db.Close()
 
 	ps := NewPostgresStorage(db)
-	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(id\\), 0\\) \\+ 1 FROM links").
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) \\+ 1 FROM links").
 		WillReturnError(sql.ErrConnDone)
 
 	n, err := ps.NextLinkUUID()
@@ -865,7 +865,7 @@ func TestPostgresStorage_NextLinkUUID(t *testing.T) {
 	defer db.Close()
 
 	ps := NewPostgresStorage(db)
-	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(id\\), 0\\) \\+ 1 FROM links").
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) \\+ 1 FROM links").
 		WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(42))
 
 	n, err := ps.NextLinkUUID()

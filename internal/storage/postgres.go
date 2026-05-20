@@ -197,10 +197,10 @@ func (p *PostgresStorage) GetLinkByShortCode(shortCode string) (Link, error) {
 	return Link{ShortURL: short, OriginalURL: url, UserID: uid, IsDeleted: isDeleted}, nil
 }
 
-// NextLinkUUID возвращает MAX(id)+1 из таблицы links.
+// NextLinkUUID возвращает следующий порядковый номер записи (COUNT+1); id в БД — UUID, не int.
 func (p *PostgresStorage) NextLinkUUID() (int, error) {
 	var n int
-	err := p.db.QueryRow(`SELECT COALESCE(MAX(id), 0) + 1 FROM links`).Scan(&n)
+	err := p.db.QueryRow(`SELECT COUNT(*) + 1 FROM links`).Scan(&n)
 	if err != nil {
 		return 1, err
 	}
