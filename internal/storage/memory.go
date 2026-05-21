@@ -135,4 +135,3 @@ func (m *MemoryStorage) GetLinkByShortCode(shortCode string) (Link, error) {
 	}
 	return Link{}, ErrLinkNotFound
 }
-

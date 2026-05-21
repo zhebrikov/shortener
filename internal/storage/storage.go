@@ -236,4 +236,3 @@ func (s *Storage) GetLinkByShortCode(shortCode string) (Link, error) {
 	}
 	return Link{}, ErrLinkNotFound
 }
-

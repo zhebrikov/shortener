@@ -836,4 +836,3 @@ func TestPostgresStorage_SoftDeleteURLsByUser_error(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-

@@ -196,4 +196,3 @@ func (p *PostgresStorage) GetLinkByShortCode(shortCode string) (Link, error) {
 	}
 	return Link{ShortURL: short, OriginalURL: url, UserID: uid, IsDeleted: isDeleted}, nil
 }
-
