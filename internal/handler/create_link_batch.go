@@ -25,6 +25,7 @@ type BatchResponseItem struct {
 	ShortURL      string `json:"short_url"`
 }
 
+// CreateLinkBatch сокращает несколько URL за один запрос (POST /api/shorten/batch).
 func CreateLinkBatch(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -73,8 +74,14 @@ func CreateLinkBatch(
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
+			linkUUID, uuidErr := storage.NewLinkUUID()
+			if uuidErr != nil {
+				log.Printf("CreateLinkBatch: storage.NewLinkUUID: %v", uuidErr)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
 			newRecord := storage.Link{
-				UUID:        0,
+				UUID:        linkUUID,
 				ShortURL:    shortURL,
 				OriginalURL: originalURL,
 				UserID:      userID,

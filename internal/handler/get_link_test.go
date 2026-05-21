@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -80,7 +81,7 @@ func TestGetLink(t *testing.T) {
 			req := httptest.NewRequest(tt.method, tt.path, nil)
 			rr := httptest.NewRecorder()
 
-			GetLink(rr, req, shortener, store)
+			GetLink(rr, req, shortener, store, nil)
 
 			if rr.Code != tt.wantStatus {
 				t.Errorf("GetLink: статус = %d, ожидалось %d", rr.Code, tt.wantStatus)
@@ -91,5 +92,16 @@ func TestGetLink(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGetLink_storeError(t *testing.T) {
+	shortener := service.NewShortener("localhost:8080")
+	store := errReadStore{err: errors.New("store down")}
+	req := httptest.NewRequest(http.MethodGet, "/abc", nil)
+	rr := httptest.NewRecorder()
+	GetLink(rr, req, shortener, store, nil)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d", rr.Code)
 	}
 }

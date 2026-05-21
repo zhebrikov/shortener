@@ -1,3 +1,4 @@
+// Package storage определяет модель ссылки и реализации хранилища (файл, память, PostgreSQL).
 package storage
 
 import (
@@ -12,9 +13,20 @@ import (
 // ErrDuplicateURL возвращается при попытке сохранить URL, который уже есть в хранилище (уникальное нарушение).
 var ErrDuplicateURL = errors.New("duplicate url")
 
+// ErrLinkNotFound возвращается, если ссылка с указанным shortCode не найдена.
+var ErrLinkNotFound = errors.New("link not found")
+
+var marshalStorageLinks = json.MarshalIndent
+
+var createStorageFile = func(filename string) error {
+	return os.WriteFile(filename, []byte("[]"), 0644)
+}
+
 // LinkStore — интерфейс хранилища ссылок (БД, файл или память).
 type LinkStore interface {
+	// ReadStorage возвращает все сохранённые ссылки.
 	ReadStorage() ([]Link, error)
+	// WriteStorage сохраняет одну ссылку; при дубликате originalURL возвращает ErrDuplicateURL.
 	WriteStorage(link Link) error
 	// WriteStorageBatch сохраняет несколько ссылок атомарно (одна транзакция/один запрос).
 	WriteStorageBatch(links []Link) error
@@ -24,8 +36,11 @@ type LinkStore interface {
 	GetLinksByUserID(userID string) ([]Link, error)
 	// SoftDeleteURLsByUser помечает ссылки как удалённые (только принадлежащие userID).
 	SoftDeleteURLsByUser(userID string, shortCodes []string) error
+	// GetLinkByShortCode возвращает запись по коду из пути (суффикс short_url).
+	GetLinkByShortCode(shortCode string) (Link, error)
 }
 
+// Storage хранит ссылки в JSON-файле на диске.
 type Storage struct {
 	mu       sync.Mutex
 	filename string
@@ -34,12 +49,21 @@ type Storage struct {
 // Проверка, что *Storage реализует LinkStore.
 var _ LinkStore = (*Storage)(nil)
 
+// Link — запись о сокращённой ссылке (оригинал, short URL, владелец, флаг удаления).
 type Link struct {
 	UUID        int    `json:"uuid"`
 	ShortURL    string `json:"short_url"`
 	OriginalURL string `json:"original_url"`
 	UserID      string `json:"user_id,omitempty"`
 	IsDeleted   bool   `json:"is_deleted,omitempty"`
+}
+
+// ShortCodeFromURL извлекает код из полного short URL (последний сегмент пути).
+func ShortCodeFromURL(shortURL string) string {
+	if i := strings.LastIndex(shortURL, "/"); i >= 0 {
+		return shortURL[i+1:]
+	}
+	return shortURL
 }
 
 // LinkMatchesShortCode проверяет, что shortCode совпадает с сохранённым значением short_url (полный URL или суффикс /code).
@@ -50,16 +74,19 @@ func LinkMatchesShortCode(storedShortURL, shortCode string) bool {
 	return storedShortURL == shortCode || strings.HasSuffix(storedShortURL, "/"+shortCode)
 }
 
+// NewStorage создаёт файловое хранилище по пути filename.
 func NewStorage(filename string) *Storage {
 	return &Storage{filename: filename}
 }
 
+// ReadStorage читает все ссылки из файла.
 func (s *Storage) ReadStorage() ([]Link, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.readStorageLocked()
 }
 
+// WriteStorage дописывает ссылку в файл; дубликат originalURL даёт ErrDuplicateURL.
 func (s *Storage) WriteStorage(link Link) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -81,7 +108,7 @@ func (s *Storage) readStorageLocked() ([]Link, error) {
 	data, err := os.ReadFile(s.filename)
 	if err != nil {
 		if os.IsNotExist(err) {
-			if err := os.WriteFile(s.filename, []byte("[]"), 0644); err != nil {
+			if err := createStorageFile(s.filename); err != nil {
 				return nil, err
 			}
 			return []Link{}, nil
@@ -98,7 +125,7 @@ func (s *Storage) readStorageLocked() ([]Link, error) {
 
 // writeAllStorageLocked перезаписывает файл; вызывающий должен держать s.mu.
 func (s *Storage) writeAllStorageLocked(links []Link) error {
-	data, err := json.MarshalIndent(links, "", "  ")
+	data, err := marshalStorageLinks(links, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -127,6 +154,7 @@ func (s *Storage) WriteStorageBatch(links []Link) error {
 	return s.writeAllStorageLocked(existing)
 }
 
+// GetShortURLByOriginalURL возвращает short URL по оригинальному адресу.
 func (s *Storage) GetShortURLByOriginalURL(originalURL string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -142,6 +170,7 @@ func (s *Storage) GetShortURLByOriginalURL(originalURL string) (string, error) {
 	return "", errors.New("url not found")
 }
 
+// GetLinksByUserID возвращает неудалённые ссылки пользователя.
 func (s *Storage) GetLinksByUserID(userID string) ([]Link, error) {
 	if userID == "" {
 		return nil, nil
@@ -159,6 +188,7 @@ func (s *Storage) GetLinksByUserID(userID string) ([]Link, error) {
 	return out, nil
 }
 
+// SoftDeleteURLsByUser помечает ссылки пользователя как удалённые.
 func (s *Storage) SoftDeleteURLsByUser(userID string, shortCodes []string) error {
 	if userID == "" || len(shortCodes) == 0 {
 		return nil
@@ -186,4 +216,23 @@ func (s *Storage) SoftDeleteURLsByUser(userID string, shortCodes []string) error
 		return nil
 	}
 	return s.writeAllStorageLocked(links)
+}
+
+// GetLinkByShortCode возвращает запись по коду из пути или ErrLinkNotFound.
+func (s *Storage) GetLinkByShortCode(shortCode string) (Link, error) {
+	if shortCode == "" {
+		return Link{}, ErrLinkNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	links, err := s.readStorageLocked()
+	if err != nil {
+		return Link{}, err
+	}
+	for _, l := range links {
+		if LinkMatchesShortCode(l.ShortURL, shortCode) {
+			return l, nil
+		}
+	}
+	return Link{}, ErrLinkNotFound
 }

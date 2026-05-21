@@ -144,6 +144,29 @@ func TestPostgresStorage_ReadStorage_Empty(t *testing.T) {
 	}
 }
 
+func TestPostgresStorage_ReadStorage_WithUserID(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	const uid = "550e8400-e29b-41d4-a716-446655440000"
+	rows := sqlmock.NewRows([]string{"url", "short_url", "user_id", "is_deleted"}).
+		AddRow("https://a.com", "s1", uid, true)
+	mock.ExpectQuery("SELECT url, short_url, user_id, is_deleted FROM links ORDER BY id").
+		WillReturnRows(rows)
+
+	links, err := ps.ReadStorage()
+	if err != nil || len(links) != 1 || links[0].UserID != uid || !links[0].IsDeleted {
+		t.Fatalf("links = %+v, err = %v", links, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPostgresStorage_ReadStorage_WithRows(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -365,5 +388,451 @@ func TestPostgresStorage_SoftDeleteURLsByUser(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unfulfilled expectations: %v", err)
+	}
+}
+
+func TestPostgresStorage_GetLinksByUserID(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	const uid = "550e8400-e29b-41d4-a716-446655440000"
+	if links, err := ps.GetLinksByUserID(""); err != nil || links != nil {
+		t.Fatalf("empty user: %+v, %v", links, err)
+	}
+
+	rows := sqlmock.NewRows([]string{"url", "short_url"}).
+		AddRow("https://a.com", "http://localhost/a1")
+	mock.ExpectQuery("SELECT url, short_url FROM links WHERE user_id").
+		WithArgs(uid).
+		WillReturnRows(rows)
+
+	links, err := ps.GetLinksByUserID(uid)
+	if err != nil || len(links) != 1 || links[0].OriginalURL != "https://a.com" {
+		t.Fatalf("got %+v, %v", links, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStorage_GetLinkByShortCode(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	if _, err := ps.GetLinkByShortCode(""); !errors.Is(err, ErrLinkNotFound) {
+		t.Fatalf("empty code: %v", err)
+	}
+
+	rows := sqlmock.NewRows([]string{"url", "short_url", "user_id", "is_deleted"}).
+		AddRow("https://a.com", "http://localhost/c1", nil, false)
+	mock.ExpectQuery("SELECT url, short_url, user_id, is_deleted FROM links").
+		WithArgs("c1").
+		WillReturnRows(rows)
+
+	link, err := ps.GetLinkByShortCode("c1")
+	if err != nil || link.OriginalURL != "https://a.com" {
+		t.Fatalf("got %+v, %v", link, err)
+	}
+
+	mock.ExpectQuery("SELECT url, short_url, user_id, is_deleted FROM links").
+		WithArgs("missing").
+		WillReturnError(sql.ErrNoRows)
+	if _, err := ps.GetLinkByShortCode("missing"); !errors.Is(err, ErrLinkNotFound) {
+		t.Fatalf("not found: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStorage_GetLinkByShortCode_withUserID(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	const uid = "550e8400-e29b-41d4-a716-446655440000"
+	rows := sqlmock.NewRows([]string{"url", "short_url", "user_id", "is_deleted"}).
+		AddRow("https://a.com", "http://localhost/c1", uid, false)
+	mock.ExpectQuery("SELECT url, short_url, user_id, is_deleted FROM links").
+		WithArgs("c1").
+		WillReturnRows(rows)
+
+	link, err := ps.GetLinkByShortCode("c1")
+	if err != nil || link.UserID != uid {
+		t.Fatalf("link = %+v, err = %v", link, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStorage_GetShortURLByOriginalURL_notFound(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	mock.ExpectQuery("SELECT short_url FROM links WHERE url").
+		WithArgs("https://missing.com").
+		WillReturnError(sql.ErrNoRows)
+
+	if _, err := ps.GetShortURLByOriginalURL("https://missing.com"); err == nil {
+		t.Fatal("expected error")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStorage_SoftDeleteURLsByUser_noop(t *testing.T) {
+	ps := NewPostgresStorage(nil)
+	if err := ps.SoftDeleteURLsByUser("", []string{"x"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStorage_ReadStorage_secondRowScanError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	rows := sqlmock.NewRows([]string{"url", "short_url", "user_id", "is_deleted"}).
+		AddRow("https://a.com", "s1", nil, false).
+		AddRow("https://b.com", "s2", nil, false).
+		RowError(1, sql.ErrConnDone)
+	mock.ExpectQuery("SELECT url, short_url, user_id, is_deleted FROM links ORDER BY id").
+		WillReturnRows(rows)
+
+	if _, err := ps.ReadStorage(); err != sql.ErrConnDone {
+		t.Fatalf("err = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStorage_ReadStorage_emptyRowsErr(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	rows := sqlmock.NewRows([]string{"url", "short_url", "user_id", "is_deleted"}).
+		CloseError(sql.ErrConnDone)
+	mock.ExpectQuery("SELECT url, short_url, user_id, is_deleted FROM links ORDER BY id").
+		WillReturnRows(rows)
+
+	if _, err := ps.ReadStorage(); err != sql.ErrConnDone {
+		t.Fatalf("err = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStorage_ReadStorage_rowsErr(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	rows := sqlmock.NewRows([]string{"url", "short_url", "user_id", "is_deleted"}).
+		AddRow("https://a.com", "s1", nil, false).
+		CloseError(sql.ErrConnDone)
+	mock.ExpectQuery("SELECT url, short_url, user_id, is_deleted FROM links ORDER BY id").
+		WillReturnRows(rows)
+
+	if _, err := ps.ReadStorage(); err != sql.ErrConnDone {
+		t.Fatalf("err = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStorage_GetByShortURL_withUserID(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	const uid = "550e8400-e29b-41d4-a716-446655440000"
+	rows := sqlmock.NewRows([]string{"url", "short_url", "user_id", "is_deleted"}).
+		AddRow("https://a.com", "s1", uid, false)
+	mock.ExpectQuery("SELECT url, short_url, user_id, is_deleted FROM links WHERE short_url = \\$1").
+		WithArgs("s1").
+		WillReturnRows(rows)
+
+	link, err := ps.GetByShortURL("s1")
+	if err != nil || link == nil || link.UserID != uid {
+		t.Fatalf("link = %+v, err = %v", link, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStorage_GetLinksByUserID_secondRowScanError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	const uid = "550e8400-e29b-41d4-a716-446655440000"
+	rows := sqlmock.NewRows([]string{"url", "short_url"}).
+		AddRow("https://a.com", "s1").
+		AddRow("https://b.com", "s2").
+		RowError(1, sql.ErrConnDone)
+	mock.ExpectQuery("SELECT url, short_url FROM links WHERE user_id").
+		WithArgs(uid).
+		WillReturnRows(rows)
+
+	if _, err := ps.GetLinksByUserID(uid); err != sql.ErrConnDone {
+		t.Fatalf("err = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStorage_GetLinksByUserID_emptyRowsErr(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	const uid = "550e8400-e29b-41d4-a716-446655440000"
+	rows := sqlmock.NewRows([]string{"url", "short_url"}).CloseError(sql.ErrConnDone)
+	mock.ExpectQuery("SELECT url, short_url FROM links WHERE user_id").
+		WithArgs(uid).
+		WillReturnRows(rows)
+
+	if _, err := ps.GetLinksByUserID(uid); err != sql.ErrConnDone {
+		t.Fatalf("err = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStorage_GetLinksByUserID_rowsErr(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	const uid = "550e8400-e29b-41d4-a716-446655440000"
+	rows := sqlmock.NewRows([]string{"url", "short_url"}).
+		AddRow("https://a.com", "s1").
+		CloseError(sql.ErrConnDone)
+	mock.ExpectQuery("SELECT url, short_url FROM links WHERE user_id").
+		WithArgs(uid).
+		WillReturnRows(rows)
+
+	if _, err := ps.GetLinksByUserID(uid); err != sql.ErrConnDone {
+		t.Fatalf("err = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStorage_GetLinksByUserID_scanError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	const uid = "550e8400-e29b-41d4-a716-446655440000"
+	rows := sqlmock.NewRows([]string{"url", "short_url"}).
+		AddRow("https://a.com", "s1").
+		RowError(0, sql.ErrConnDone)
+	mock.ExpectQuery("SELECT url, short_url FROM links WHERE user_id").
+		WithArgs(uid).
+		WillReturnRows(rows)
+
+	if _, err := ps.GetLinksByUserID(uid); err != sql.ErrConnDone {
+		t.Fatalf("err = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStorage_ReadStorage_scanError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	rows := sqlmock.NewRows([]string{"url", "short_url", "user_id", "is_deleted"}).
+		AddRow("https://a.com", "s1", nil, false).
+		RowError(0, sql.ErrConnDone)
+	mock.ExpectQuery("SELECT url, short_url, user_id, is_deleted FROM links ORDER BY id").
+		WillReturnRows(rows)
+
+	if _, err := ps.ReadStorage(); err != sql.ErrConnDone {
+		t.Fatalf("err = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStorage_WriteStorage_withUserID(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	const uid = "550e8400-e29b-41d4-a716-446655440000"
+	link := Link{ShortURL: "s1", OriginalURL: "https://a.com", UserID: uid}
+
+	mock.ExpectExec("INSERT INTO links \\(url, short_url, user_id, is_deleted\\) VALUES \\(\\$1, \\$2, \\$3, \\$4\\)").
+		WithArgs(link.OriginalURL, link.ShortURL, uid, false).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := ps.WriteStorage(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStorage_WriteStorageBatch_execError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	links := []Link{{OriginalURL: "https://a.com", ShortURL: "s1", UserID: "550e8400-e29b-41d4-a716-446655440000"}}
+
+	mock.ExpectExec("INSERT INTO links").
+		WillReturnError(sql.ErrConnDone)
+
+	if err := ps.WriteStorageBatch(links); err != sql.ErrConnDone {
+		t.Fatalf("err = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStorage_GetShortURLByOriginalURL_queryError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	mock.ExpectQuery("SELECT short_url FROM links WHERE url").
+		WithArgs("https://a.com").
+		WillReturnError(sql.ErrConnDone)
+
+	if _, err := ps.GetShortURLByOriginalURL("https://a.com"); err != sql.ErrConnDone {
+		t.Fatalf("err = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStorage_GetLinksByUserID_queryError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	const uid = "550e8400-e29b-41d4-a716-446655440000"
+	mock.ExpectQuery("SELECT url, short_url FROM links WHERE user_id").
+		WithArgs(uid).
+		WillReturnError(sql.ErrConnDone)
+
+	if _, err := ps.GetLinksByUserID(uid); err != sql.ErrConnDone {
+		t.Fatalf("err = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStorage_GetLinkByShortCode_queryError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	mock.ExpectQuery("SELECT url, short_url, user_id, is_deleted FROM links").
+		WithArgs("c1").
+		WillReturnError(sql.ErrConnDone)
+
+	if _, err := ps.GetLinkByShortCode("c1"); err != sql.ErrConnDone {
+		t.Fatalf("err = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStorage_SoftDeleteURLsByUser_error(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	const uid = "550e8400-e29b-41d4-a716-446655440000"
+	mock.ExpectExec("UPDATE links SET is_deleted = true").
+		WithArgs(uid, pq.Array([]string{"x"})).
+		WillReturnError(sql.ErrConnDone)
+
+	if err := ps.SoftDeleteURLsByUser(uid, []string{"x"}); err != sql.ErrConnDone {
+		t.Fatalf("err = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

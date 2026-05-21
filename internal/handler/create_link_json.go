@@ -7,24 +7,29 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/zhebrikov/shortener/internal/audit"
 	"github.com/zhebrikov/shortener/internal/auth"
 	"github.com/zhebrikov/shortener/internal/service"
 	"github.com/zhebrikov/shortener/internal/storage"
 )
 
+// Input — тело запроса POST /api/shorten.
 type Input struct {
 	URL string `json:"url"`
 }
 
+// Output — ответ POST /api/shorten.
 type Output struct {
 	Result string `json:"result"`
 }
 
+// CreateLinkJSON сокращает URL из JSON-тела запроса и сохраняет запись в хранилище.
 func CreateLinkJSON(
 	w http.ResponseWriter,
 	r *http.Request,
 	shortener *service.Shortener,
 	store storage.LinkStore,
+	auditPub *audit.Publisher,
 ) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -46,23 +51,16 @@ func CreateLinkJSON(
 		return
 	}
 
-	links, err := store.ReadStorage()
+	nextUUID, err := storage.NewLinkUUID()
 	if err != nil {
-		log.Printf("CreateLinkJSON: store.ReadStorage: %v", err)
+		log.Printf("CreateLinkJSON: storage.NewLinkUUID: %v", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 
-	var lastLinkUUID int
-	if len(links) == 0 {
-		lastLinkUUID = 0
-	} else {
-		lastLinkUUID = links[len(links)-1].UUID
-	}
-
 	userID, _ := auth.UserIDFromContext(r.Context())
 	newRecord := storage.Link{
-		UUID:        lastLinkUUID + 1,
+		UUID:        nextUUID,
 		ShortURL:    shortURL,
 		OriginalURL: input.URL,
 		UserID:      userID,
@@ -88,14 +86,8 @@ func CreateLinkJSON(
 		return
 	}
 
+	publishAudit(auditPub, r, audit.ActionShorten, input.URL)
 	w.Header().Set("Content-Type", "application/json")
-	result := Output{Result: shortURL}
-	resultJSON, err := json.Marshal(result)
-	if err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
 	w.WriteHeader(http.StatusCreated)
-	w.Write(resultJSON)
+	_ = json.NewEncoder(w).Encode(Output{Result: shortURL})
 }

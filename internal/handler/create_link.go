@@ -5,12 +5,14 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/zhebrikov/shortener/internal/audit"
 	"github.com/zhebrikov/shortener/internal/auth"
 	"github.com/zhebrikov/shortener/internal/service"
 	"github.com/zhebrikov/shortener/internal/storage"
 )
 
-func CreateLink(w http.ResponseWriter, r *http.Request, shortener *service.Shortener, store storage.LinkStore) {
+// CreateLink сокращает URL из тела запроса (Content-Type: text/plain) и сохраняет запись в хранилище.
+func CreateLink(w http.ResponseWriter, r *http.Request, shortener *service.Shortener, store storage.LinkStore, auditPub *audit.Publisher) {
 	if r.Header.Get("Content-Type") != "text/plain" {
 		http.Error(w, "Content-Type must be text/plain", http.StatusBadRequest)
 		return
@@ -30,22 +32,15 @@ func CreateLink(w http.ResponseWriter, r *http.Request, shortener *service.Short
 		return
 	}
 
-	links, err := store.ReadStorage()
+	nextUUID, err := storage.NewLinkUUID()
 	if err != nil {
-		http.Error(w, "Failed to read storage", http.StatusInternalServerError)
+		http.Error(w, "Failed to generate link id", http.StatusInternalServerError)
 		return
-	}
-
-	var lastLinkUUID int
-	if len(links) == 0 {
-		lastLinkUUID = 0
-	} else {
-		lastLinkUUID = links[len(links)-1].UUID
 	}
 
 	userID, _ := auth.UserIDFromContext(r.Context())
 	newRecord := storage.Link{
-		UUID:        lastLinkUUID + 1,
+		UUID:        nextUUID,
 		ShortURL:    shortURL,
 		OriginalURL: originalURL,
 		UserID:      userID,
@@ -67,6 +62,7 @@ func CreateLink(w http.ResponseWriter, r *http.Request, shortener *service.Short
 		return
 	}
 
+	publishAudit(auditPub, r, audit.ActionShorten, originalURL)
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte(shortURL))

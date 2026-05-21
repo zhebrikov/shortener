@@ -211,3 +211,21 @@ func TestGzip_AcceptEncodingContainsGzip(t *testing.T) {
 		t.Errorf("Content-Encoding should be gzip when Accept-Encoding contains gzip")
 	}
 }
+
+func TestGzip_WriteHeaderCalledTwice(t *testing.T) {
+	handler := Gzip(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Errorf("status = %d; want %d", rec.Code, http.StatusCreated)
+	}
+}

@@ -23,6 +23,7 @@ func NewPostgresStorage(db *sql.DB) *PostgresStorage {
 	return &PostgresStorage{db: db}
 }
 
+// ReadStorage возвращает все строки таблицы links.
 func (p *PostgresStorage) ReadStorage() ([]Link, error) {
 	rows, err := p.db.Query("SELECT url, short_url, user_id, is_deleted FROM links ORDER BY id")
 	if err != nil {
@@ -63,6 +64,7 @@ func (p *PostgresStorage) GetByShortURL(shortURL string) (*Link, error) {
 	return &Link{ShortURL: short, OriginalURL: url, UserID: uid, IsDeleted: isDeleted}, nil
 }
 
+// GetShortURLByOriginalURL возвращает short_url по полю url.
 func (p *PostgresStorage) GetShortURLByOriginalURL(originalURL string) (string, error) {
 	var shortURL string
 	err := p.db.QueryRow("SELECT short_url FROM links WHERE url = $1", originalURL).Scan(&shortURL)
@@ -75,6 +77,7 @@ func (p *PostgresStorage) GetShortURLByOriginalURL(originalURL string) (string, 
 	return shortURL, nil
 }
 
+// WriteStorage вставляет одну строку; уникальное нарушение по url даёт ErrDuplicateURL.
 func (p *PostgresStorage) WriteStorage(link Link) error {
 	var userID interface{}
 	if link.UserID != "" {
@@ -123,6 +126,7 @@ func (p *PostgresStorage) WriteStorageBatch(links []Link) error {
 	return nil
 }
 
+// GetLinksByUserID возвращает неудалённые ссылки пользователя.
 func (p *PostgresStorage) GetLinksByUserID(userID string) ([]Link, error) {
 	if userID == "" {
 		return nil, nil
@@ -165,4 +169,30 @@ func (p *PostgresStorage) SoftDeleteURLsByUser(userID string, shortCodes []strin
 		)
 	`, userID, pq.Array(shortCodes))
 	return err
+}
+
+// GetLinkByShortCode ищет строку по коду (полный short_url или суффикс пути).
+func (p *PostgresStorage) GetLinkByShortCode(shortCode string) (Link, error) {
+	if shortCode == "" {
+		return Link{}, ErrLinkNotFound
+	}
+	var url, short string
+	var userID sql.NullString
+	var isDeleted bool
+	err := p.db.QueryRow(
+		`SELECT url, short_url, user_id, is_deleted FROM links
+		 WHERE short_url = $1 OR short_url LIKE '%/' || $1`,
+		shortCode,
+	).Scan(&url, &short, &userID, &isDeleted)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Link{}, ErrLinkNotFound
+		}
+		return Link{}, err
+	}
+	uid := ""
+	if userID.Valid {
+		uid = userID.String
+	}
+	return Link{ShortURL: short, OriginalURL: url, UserID: uid, IsDeleted: isDeleted}, nil
 }

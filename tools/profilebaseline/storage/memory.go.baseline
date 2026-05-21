@@ -1,0 +1,120 @@
+package storage
+
+import (
+	"errors"
+	"sync"
+)
+
+// MemoryStorage — хранилище ссылок в памяти (baseline: без индекса по shortCode).
+type MemoryStorage struct {
+	mu    sync.RWMutex
+	links []Link
+}
+
+var _ LinkStore = (*MemoryStorage)(nil)
+
+func NewMemoryStorage() *MemoryStorage {
+	return &MemoryStorage{links: make([]Link, 0)}
+}
+
+func (m *MemoryStorage) ReadStorage() ([]Link, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]Link, len(m.links))
+	copy(out, m.links)
+	return out, nil
+}
+
+func (m *MemoryStorage) WriteStorage(link Link) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, l := range m.links {
+		if l.OriginalURL == link.OriginalURL {
+			return ErrDuplicateURL
+		}
+	}
+	m.links = append(m.links, link)
+	return nil
+}
+
+func (m *MemoryStorage) WriteStorageBatch(links []Link) error {
+	if len(links) == 0 {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.links = append(m.links, links...)
+	return nil
+}
+
+func (m *MemoryStorage) GetShortURLByOriginalURL(originalURL string) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, link := range m.links {
+		if link.OriginalURL == originalURL {
+			return link.ShortURL, nil
+		}
+	}
+	return "", errors.New("url not found")
+}
+
+func (m *MemoryStorage) GetLinksByUserID(userID string) ([]Link, error) {
+	if userID == "" {
+		return nil, nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []Link
+	for _, l := range m.links {
+		if l.UserID == userID && !l.IsDeleted {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+func (m *MemoryStorage) SoftDeleteURLsByUser(userID string, shortCodes []string) error {
+	if userID == "" || len(shortCodes) == 0 {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.links {
+		if m.links[i].UserID != userID || m.links[i].IsDeleted {
+			continue
+		}
+		for _, code := range shortCodes {
+			if LinkMatchesShortCode(m.links[i].ShortURL, code) {
+				m.links[i].IsDeleted = true
+				break
+			}
+		}
+	}
+	return nil
+}
+
+// GetLinkByShortCode (baseline) читает и копирует всё хранилище на каждый запрос.
+func (m *MemoryStorage) GetLinkByShortCode(shortCode string) (Link, error) {
+	links, err := m.ReadStorage()
+	if err != nil {
+		return Link{}, err
+	}
+	for _, l := range links {
+		if LinkMatchesShortCode(l.ShortURL, shortCode) {
+			return l, nil
+		}
+	}
+	return Link{}, ErrLinkNotFound
+}
+
+// NextLinkUUID (baseline) читает и копирует всё хранилище.
+func (m *MemoryStorage) NextLinkUUID() (int, error) {
+	links, err := m.ReadStorage()
+	if err != nil {
+		return 0, err
+	}
+	if len(links) == 0 {
+		return 1, nil
+	}
+	return links[len(links)-1].UUID + 1, nil
+}

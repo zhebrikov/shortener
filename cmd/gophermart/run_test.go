@@ -31,8 +31,8 @@ func (smokeStore) UploadOrder(context.Context, string, string) (store.OrderUploa
 func (smokeStore) ListUserOrders(context.Context, string) iter.Seq2[store.OrderRow, error] {
 	return func(yield func(store.OrderRow, error) bool) {}
 }
-func (smokeStore) Balance(context.Context, string) (float64, float64, error)        { return 0, 0, nil }
-func (smokeStore) Withdraw(context.Context, string, string, float64) error          { return nil }
+func (smokeStore) Balance(context.Context, string) (float64, float64, error) { return 0, 0, nil }
+func (smokeStore) Withdraw(context.Context, string, string, float64) error   { return nil }
 func (smokeStore) ListWithdrawals(context.Context, string) ([]store.WithdrawalRow, error) {
 	return nil, nil
 }

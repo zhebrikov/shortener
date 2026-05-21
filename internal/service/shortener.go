@@ -1,3 +1,4 @@
+// Package service содержит бизнес-логику сокращения и разрешения ссылок.
 package service
 
 import (
@@ -6,18 +7,21 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/zhebrikov/shortener/internal/storage"
 )
 
+// Shortener генерирует короткие коды и полные short URL на основе baseURL.
 type Shortener struct {
 	mu       sync.Mutex
 	repoLink map[string]string
 	baseURL  string
 }
 
+// NewShortener создаёт сервис с заданным базовым адресом для сокращённых ссылок.
 func NewShortener(baseURL string) *Shortener {
 	return &Shortener{
 		repoLink: make(map[string]string),
@@ -41,15 +45,28 @@ func (s *Shortener) shortURL(shortCode string) (string, error) {
 	return fullURL, nil
 }
 
+func shortCodeFromHash(hash [20]byte) string {
+	var buf [8]byte
+	hex.Encode(buf[:], hash[:4])
+	return string(buf[:])
+}
+
+// CreateLink возвращает полный short URL для originalURL (коллизии хеша разрешаются суффиксом _N).
 func (s *Shortener) CreateLink(originalURL string) (string, error) {
+	input := originalURL
+	var suffix strings.Builder
 	for i := 0; ; i++ {
-		input := originalURL
 		if i > 0 {
-			input = fmt.Sprintf("%s_%d", originalURL, i)
+			suffix.Reset()
+			suffix.Grow(len(originalURL) + 12)
+			suffix.WriteString(originalURL)
+			suffix.WriteByte('_')
+			suffix.WriteString(strconv.Itoa(i))
+			input = suffix.String()
 		}
 
 		hash := sha1.Sum([]byte(input))
-		shortCode := hex.EncodeToString(hash[:])[:8]
+		shortCode := shortCodeFromHash(hash)
 
 		s.mu.Lock()
 		_, exists := s.repoLink[shortCode]
@@ -81,17 +98,15 @@ var (
 // - ErrLinkDeleted: ссылка помечена как удаленная (нужно вернуть 410)
 // - прочие ошибки: проблемы с хранилищем/парсингом данных (нужно вернуть 500)
 func (s *Shortener) GetLink(shortCode string, store storage.LinkStore) (originalURL string, err error) {
-	links, err := store.ReadStorage()
+	link, err := store.GetLinkByShortCode(shortCode)
 	if err != nil {
+		if errors.Is(err, storage.ErrLinkNotFound) {
+			return "", fmt.Errorf("%w: shortCode=%s", ErrLinkNotFound, shortCode)
+		}
 		return "", err
 	}
-	for _, link := range links {
-		if storage.LinkMatchesShortCode(link.ShortURL, shortCode) {
-			if link.IsDeleted {
-				return "", fmt.Errorf("%w: shortCode=%s", ErrLinkDeleted, shortCode)
-			}
-			return link.OriginalURL, nil
-		}
+	if link.IsDeleted {
+		return "", fmt.Errorf("%w: shortCode=%s", ErrLinkDeleted, shortCode)
 	}
-	return "", fmt.Errorf("%w: shortCode=%s", ErrLinkNotFound, shortCode)
+	return link.OriginalURL, nil
 }

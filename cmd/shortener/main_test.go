@@ -3,16 +3,22 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/go-chi/chi/v5"
 	"github.com/zhebrikov/shortener/internal/asyncdelete"
+	"github.com/zhebrikov/shortener/internal/audit"
 	"github.com/zhebrikov/shortener/internal/auth"
 	"github.com/zhebrikov/shortener/internal/handler"
 	"github.com/zhebrikov/shortener/internal/logger"
@@ -42,7 +48,7 @@ func handlerFromMain(t *testing.T) *handler.ShortenerHandler {
 	t.Helper()
 	shortener := service.NewShortener("localhost:8080")
 	store := storageFromTestFile(t)
-	return handler.NewShortenerHandler(shortener, store, asyncdelete.NewWorker(store))
+	return handler.NewShortenerHandler(shortener, store, asyncdelete.NewWorker(store), nil)
 }
 
 // routerFromMain возвращает роутер в том же виде, что и в main (для интеграционных тестов).
@@ -50,7 +56,7 @@ func routerFromMain(t *testing.T, baseURL string) http.Handler {
 	t.Helper()
 	shortener := service.NewShortener(baseURL)
 	store := storageFromTestFile(t)
-	h := handler.NewShortenerHandler(shortener, store, asyncdelete.NewWorker(store))
+	h := handler.NewShortenerHandler(shortener, store, asyncdelete.NewWorker(store), nil)
 	r := chi.NewRouter()
 	r.Use(logger.Middleware(zap.NewNop()))
 	r.Use(middleware.Gzip)
@@ -172,6 +178,53 @@ func TestGetConfig(t *testing.T) {
 		}
 		if got.FileStorage != "/tmp/links.json" {
 			t.Errorf("getConfig() FileStorage = %q; want /tmp/links.json", got.FileStorage)
+		}
+	})
+
+	t.Run("AUDIT_FILE and AUDIT_URL from env", func(t *testing.T) {
+		oldAF, afOk := saveEnv("AUDIT_FILE")
+		oldAU, auOk := saveEnv("AUDIT_URL")
+		os.Setenv("AUDIT_FILE", "/tmp/audit.log")
+		os.Setenv("AUDIT_URL", "https://audit.example/hook")
+		defer restoreEnv("AUDIT_FILE", oldAF, afOk)
+		defer restoreEnv("AUDIT_URL", oldAU, auOk)
+
+		got, err := getConfig(defaultCfg)
+		if err != nil {
+			t.Fatalf("getConfig() unexpected error: %v", err)
+		}
+		if got.AuditFile != "/tmp/audit.log" {
+			t.Errorf("getConfig() AuditFile = %q; want /tmp/audit.log", got.AuditFile)
+		}
+		if got.AuditURL != "https://audit.example/hook" {
+			t.Errorf("getConfig() AuditURL = %q; want https://audit.example/hook", got.AuditURL)
+		}
+	})
+
+	t.Run("missing AUDIT_FILE uses default from flags", func(t *testing.T) {
+		oldAF, afOk := saveEnv("AUDIT_FILE")
+		oldAU, auOk := saveEnv("AUDIT_URL")
+		os.Unsetenv("AUDIT_FILE")
+		os.Unsetenv("AUDIT_URL")
+		defer restoreEnv("AUDIT_FILE", oldAF, afOk)
+		defer restoreEnv("AUDIT_URL", oldAU, auOk)
+
+		got, err := getConfig(Config{
+			ServerAddress: "localhost:8080",
+			BaseURL:       "http://example.com",
+			FileStorage:   "",
+			DatabaseDsn:   "",
+			AuditFile:     "/flags/audit.log",
+			AuditURL:      "https://flags.example/h",
+		})
+		if err != nil {
+			t.Fatalf("getConfig: %v", err)
+		}
+		if got.AuditFile != "/flags/audit.log" {
+			t.Errorf("AuditFile = %q", got.AuditFile)
+		}
+		if got.AuditURL != "https://flags.example/h" {
+			t.Errorf("AuditURL = %q", got.AuditURL)
 		}
 	})
 }
@@ -739,5 +792,344 @@ func TestRouter_Gzip_NoAcceptEncoding_ReturnsUncompressed(t *testing.T) {
 	}
 	if !strings.HasPrefix(out.Result, "http://localhost:8080/") {
 		t.Errorf("response url %q does not start with base URL", out.Result)
+	}
+}
+
+func TestRouter_auditFileAfterPOST(t *testing.T) {
+	auditPath := filepath.Join(t.TempDir(), "audit.log")
+	pub := audit.NewPublisher(audit.NewFileObserver(auditPath))
+
+	shortener := service.NewShortener("http://localhost:8080")
+	store := storageFromTestFile(t)
+	h := handler.NewShortenerHandler(shortener, store, asyncdelete.NewWorker(store), pub)
+
+	r := chi.NewRouter()
+	r.Use(logger.Middleware(zap.NewNop()))
+	r.Use(auth.Middleware("test-secret-key-for-router-tests"))
+	r.Post("/", h.CreateLink)
+	r.Get("/{shortCode}", h.GetLink)
+	r.Post("/api/shorten", h.CreateLinkJSON)
+
+	wantURL := "https://router-audit.example/r"
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte(wantURL)))
+	req.Header.Set("Content-Type", "text/plain")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("POST /: status %d", rr.Code)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var data []byte
+	var err error
+	for time.Now().Before(deadline) {
+		data, err = os.ReadFile(auditPath)
+		if err == nil && len(data) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("read audit file: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatal("audit file empty")
+	}
+
+	var ev struct {
+		Action string `json:"action"`
+		URL    string `json:"url"`
+	}
+	line := bytes.TrimSpace(data)
+	if err := json.Unmarshal(line, &ev); err != nil {
+		t.Fatalf("audit JSON: %v data=%q", err, data)
+	}
+	if ev.Action != "shorten" || ev.URL != wantURL {
+		t.Errorf("audit event = %+v, want shorten / %q", ev, wantURL)
+	}
+}
+
+func TestRouter_auditHTTPPostSink(t *testing.T) {
+	var mu sync.Mutex
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method %s", r.Method)
+		}
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		gotBody = b
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	pub := audit.NewPublisher(audit.NewHTTPObserver(srv.URL, srv.Client()))
+	shortener := service.NewShortener("http://localhost:8080")
+	store := storageFromTestFile(t)
+	h := handler.NewShortenerHandler(shortener, store, asyncdelete.NewWorker(store), pub)
+
+	r := chi.NewRouter()
+	r.Use(logger.Middleware(zap.NewNop()))
+	r.Use(auth.Middleware("test-secret-key-for-router-tests"))
+	r.Post("/", h.CreateLink)
+
+	wantURL := "https://router-http-audit.example/x"
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte(wantURL)))
+	req.Header.Set("Content-Type", "text/plain")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("POST /: status %d", rr.Code)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var body []byte
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		if len(gotBody) > 0 {
+			body = append([]byte(nil), gotBody...)
+		}
+		mu.Unlock()
+		if len(body) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(body) == 0 {
+		t.Fatal("audit server received no body")
+	}
+	var ev struct {
+		Action string `json:"action"`
+		URL    string `json:"url"`
+	}
+	if err := json.Unmarshal(body, &ev); err != nil {
+		t.Fatalf("audit JSON: %v", err)
+	}
+	if ev.Action != "shorten" || ev.URL != wantURL {
+		t.Errorf("got %+v", ev)
+	}
+}
+
+func TestNewApp_memoryStore(t *testing.T) {
+	dir := t.TempDir()
+	auditPath := filepath.Join(dir, "audit.log")
+	application, err := newApp(Config{
+		ServerAddress: "localhost:8081",
+		BaseURL:       "localhost:8081",
+		AuditFile:     auditPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if application.Handler == nil || application.Port != ":8081" {
+		t.Fatalf("app = %+v", application)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("https://example.com/new-app"))
+	req.Header.Set("Content-Type", "text/plain")
+	rr := httptest.NewRecorder()
+	application.Handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("POST / status = %d", rr.Code)
+	}
+}
+
+func TestNewApp_fileStore(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "links.json")
+	application, err := newApp(Config{
+		ServerAddress: "localhost:8082",
+		BaseURL:       "localhost:8082",
+		FileStorage:   filePath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
+	rr := httptest.NewRecorder()
+	application.Handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /ping status = %d", rr.Code)
+	}
+}
+
+func TestNewApp_invalidServerAddress(t *testing.T) {
+	if _, err := newApp(Config{ServerAddress: "invalid-no-port", BaseURL: "localhost:8080"}); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestRun_flagParseError(t *testing.T) {
+	err := run([]string{"-unknown-flag"}, func(string, http.Handler) error { return nil })
+	if err == nil {
+		t.Fatal("expected flag parse error")
+	}
+}
+
+func TestRun_memoryStore(t *testing.T) {
+	err := run(nil, func(_ string, _ http.Handler) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("run() err = %v", err)
+	}
+}
+
+func TestRun_invalidAddress(t *testing.T) {
+	if err := run([]string{"-a", "bad-host"}, func(string, http.Handler) error { return nil }); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestRun_databaseConnectionError(t *testing.T) {
+	err := run([]string{"-d", "postgres://invalid:5432/nodb"}, func(string, http.Handler) error { return nil })
+	if err == nil {
+		t.Fatal("expected connection error")
+	}
+}
+
+func TestExitCode_success(t *testing.T) {
+	if exitCode(nil, func(string, http.Handler) error { return nil }) != 0 {
+		t.Fatal("expected exit code 0")
+	}
+}
+
+func TestExitCode_error(t *testing.T) {
+	if exitCode([]string{"-a", "invalid-no-port"}, func(string, http.Handler) error { return nil }) == 0 {
+		t.Fatal("expected non-zero exit code")
+	}
+}
+
+func TestMain_callsExit(t *testing.T) {
+	var code int
+	oldExit := osExit
+	oldListen := appListen
+	osExit = func(c int) { code = c }
+	appListen = func(string, http.Handler) error { return nil }
+	defer func() {
+		osExit = oldExit
+		appListen = oldListen
+	}()
+
+	oldArgs := os.Args
+	defer func() { os.Args = oldArgs }()
+
+	os.Args = []string{"shortener-test"}
+	main()
+	if code != 0 {
+		t.Fatalf("main() exit code = %d, want 0", code)
+	}
+}
+
+func TestNewApp_postgresStore(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	oldConnect := dbConnect
+	oldMigrate := runMigrate
+	dbConnect = func(string) (*sql.DB, error) { return db, nil }
+	runMigrate = func(string, string) error { return nil }
+	defer func() {
+		dbConnect = oldConnect
+		runMigrate = oldMigrate
+	}()
+
+	application, err := newApp(Config{
+		ServerAddress: "localhost:8084",
+		BaseURL:       "localhost:8084",
+		DatabaseDsn:   "postgres://mock",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
+	rr := httptest.NewRecorder()
+	application.Handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /ping status = %d", rr.Code)
+	}
+}
+
+func TestNewApp_dbConnectError(t *testing.T) {
+	oldConnect := dbConnect
+	dbConnect = func(string) (*sql.DB, error) { return nil, os.ErrInvalid }
+	defer func() { dbConnect = oldConnect }()
+
+	if _, err := newApp(Config{
+		ServerAddress: "localhost:8085",
+		BaseURL:       "localhost:8085",
+		DatabaseDsn:   "postgres://fail",
+	}); err == nil {
+		t.Fatal("expected db connect error")
+	}
+}
+
+func TestNewApp_migrationError(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	oldConnect := dbConnect
+	oldMigrate := runMigrate
+	dbConnect = func(string) (*sql.DB, error) { return db, nil }
+	runMigrate = func(string, string) error { return os.ErrInvalid }
+	defer func() {
+		dbConnect = oldConnect
+		runMigrate = oldMigrate
+	}()
+
+	if _, err := newApp(Config{
+		ServerAddress: "localhost:8086",
+		BaseURL:       "localhost:8086",
+		DatabaseDsn:   "postgres://mock",
+	}); err == nil {
+		t.Fatal("expected migration error")
+	}
+}
+
+func TestRunMigrations_invalidPath(t *testing.T) {
+	if err := runMigrations("/nonexistent-migrations-dir-xyz", "postgres://localhost/db"); err == nil {
+		t.Fatal("expected migration error")
+	}
+}
+
+func TestRunMigrations_moduleMigrationsDir(t *testing.T) {
+	migrations := filepath.Join("..", "..", "migrations")
+	if _, err := os.Stat(migrations); err != nil {
+		t.Skip("migrations directory not found from cmd/shortener")
+	}
+	// migrate.New должен открыть file://; Up упадёт без живой БД — покрываем ветку успешного New.
+	if err := runMigrations(migrations, "postgres://127.0.0.1:1/nodb?connect_timeout=1"); err == nil {
+		t.Fatal("expected migration up error without database")
+	}
+}
+
+func TestNewApp_auditObservers(t *testing.T) {
+	dir := t.TempDir()
+	auditPath := filepath.Join(dir, "audit.log")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	application, err := newApp(Config{
+		ServerAddress: "localhost:8083",
+		BaseURL:       "localhost:8083",
+		AuditFile:     auditPath,
+		AuditURL:      srv.URL,
+		SecretKey:     "",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if application.Handler == nil {
+		t.Fatal("handler is nil")
 	}
 }

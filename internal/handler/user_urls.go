@@ -9,7 +9,7 @@ import (
 	"github.com/zhebrikov/shortener/internal/storage"
 )
 
-// UserURLItem — элемент ответа GET /api/user/urls.
+// UserURLItem — пара сокращённого и оригинального URL в ответе GET /api/user/urls.
 type UserURLItem struct {
 	ShortURL    string `json:"short_url"`
 	OriginalURL string `json:"original_url"`

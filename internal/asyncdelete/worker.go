@@ -1,3 +1,4 @@
+// Package asyncdelete выполняет отложенное мягкое удаление ссылок пользователя батчами.
 package asyncdelete
 
 import (
