@@ -156,4 +156,3 @@ func (e errStore) GetShortURLByOriginalURL(string) (string, error) { return "", 
 func (e errStore) GetLinksByUserID(string) ([]storage.Link, error) { return nil, e.err }
 func (e errStore) SoftDeleteURLsByUser(string, []string) error     { return e.err }
 func (e errStore) GetLinkByShortCode(string) (storage.Link, error) { return storage.Link{}, e.err }
-func (e errStore) NextLinkUUID() (int, error)                      { return 0, e.err }

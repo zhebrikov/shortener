@@ -105,16 +105,6 @@ func mustMarshal(t *testing.T, v interface{}) []byte {
 func TestCreateLinkJSON_storeErrors(t *testing.T) {
 	shortener := service.NewShortener("localhost:8080")
 
-	t.Run("NextLinkUUID error", func(t *testing.T) {
-		store := stubStore{LinkStore: mustTempStorage(t, "[]"), nextUUIDErr: errors.New("uuid failed")}
-		req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(mustMarshal(t, Input{URL: "https://example.com/a"})))
-		rr := httptest.NewRecorder()
-		CreateLinkJSON(rr, req, shortener, store, nil)
-		if rr.Code != http.StatusInternalServerError {
-			t.Fatalf("status = %d", rr.Code)
-		}
-	})
-
 	t.Run("duplicate conflict", func(t *testing.T) {
 		store := mustTempStorage(t, `[{"uuid":1,"short_url":"http://localhost/8080/ex","original_url":"https://example.com/dup-json"}]`)
 		req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(mustMarshal(t, Input{URL: "https://example.com/dup-json"})))

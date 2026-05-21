@@ -136,12 +136,3 @@ func (m *MemoryStorage) GetLinkByShortCode(shortCode string) (Link, error) {
 	return Link{}, ErrLinkNotFound
 }
 
-// NextLinkUUID возвращает следующий порядковый UUID для новой записи.
-func (m *MemoryStorage) NextLinkUUID() (int, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if len(m.links) == 0 {
-		return 1, nil
-	}
-	return m.links[len(m.links)-1].UUID + 1, nil
-}

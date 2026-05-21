@@ -271,20 +271,6 @@ func TestStorage_GetLinkByShortCode(t *testing.T) {
 	}
 }
 
-func TestStorage_NextLinkUUID(t *testing.T) {
-	dir := t.TempDir()
-	s := NewStorage(filepath.Join(dir, "uuid.json"))
-	n, err := s.NextLinkUUID()
-	if err != nil || n != 1 {
-		t.Fatalf("empty: %d, %v", n, err)
-	}
-	_ = s.WriteStorage(Link{UUID: 5, ShortURL: "a", OriginalURL: "https://a.com"})
-	n, err = s.NextLinkUUID()
-	if err != nil || n != 6 {
-		t.Fatalf("after write: %d, %v", n, err)
-	}
-}
-
 func TestStorage_WriteStorage_duplicate(t *testing.T) {
 	dir := t.TempDir()
 	s := NewStorage(filepath.Join(dir, "dup.json"))
@@ -390,15 +376,6 @@ func TestStorage_GetLinksByUserID_readError(t *testing.T) {
 	s := NewStorage(filename)
 	if _, err := s.GetLinksByUserID("u1"); err == nil {
 		t.Fatal("expected read error")
-	}
-}
-
-func TestStorage_NextLinkUUID_readError(t *testing.T) {
-	dir := t.TempDir()
-	s := NewStorage(dir)
-	n, err := s.NextLinkUUID()
-	if err == nil || n != 1 {
-		t.Fatalf("NextLinkUUID() = (%d, %v)", n, err)
 	}
 }
 

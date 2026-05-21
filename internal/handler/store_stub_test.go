@@ -9,7 +9,6 @@ import (
 type stubStore struct {
 	storage.LinkStore
 	writeErr       error
-	nextUUIDErr    error
 	getShortURLErr error
 }
 
@@ -18,13 +17,6 @@ func (s stubStore) WriteStorage(link storage.Link) error {
 		return s.writeErr
 	}
 	return s.LinkStore.WriteStorage(link)
-}
-
-func (s stubStore) NextLinkUUID() (int, error) {
-	if s.nextUUIDErr != nil {
-		return 0, s.nextUUIDErr
-	}
-	return s.LinkStore.NextLinkUUID()
 }
 
 func (s stubStore) GetShortURLByOriginalURL(originalURL string) (string, error) {
@@ -47,7 +39,6 @@ func (e errReadStore) SoftDeleteURLsByUser(string, []string) error     { return 
 func (e errReadStore) GetLinkByShortCode(string) (storage.Link, error) {
 	return storage.Link{}, e.err
 }
-func (e errReadStore) NextLinkUUID() (int, error) { return 0, e.err }
 
 type badShortenerStore struct {
 	*storage.MemoryStorage

@@ -42,9 +42,9 @@ func main() {
 			fmt.Fprintf(os.Stderr, "CreateLink: %v\n", err)
 			os.Exit(1)
 		}
-		uuid, err := store.NextLinkUUID()
+		uuid, err := storage.NewLinkUUID()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "NextLinkUUID: %v\n", err)
+			fmt.Fprintf(os.Stderr, "NewLinkUUID: %v\n", err)
 			os.Exit(1)
 		}
 		if err := store.WriteStorage(storage.Link{

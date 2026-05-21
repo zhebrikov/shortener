@@ -96,17 +96,6 @@ func TestCreateLink_duplicateConflict(t *testing.T) {
 func TestCreateLink_storeErrors(t *testing.T) {
 	shortener := service.NewShortener("localhost:8080")
 
-	t.Run("NextLinkUUID error", func(t *testing.T) {
-		store := stubStore{LinkStore: mustTempStorage(t, "[]"), nextUUIDErr: errors.New("uuid failed")}
-		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("https://example.com/x"))
-		req.Header.Set("Content-Type", "text/plain")
-		rr := httptest.NewRecorder()
-		CreateLink(rr, req, shortener, store, nil)
-		if rr.Code != http.StatusInternalServerError {
-			t.Fatalf("status = %d", rr.Code)
-		}
-	})
-
 	t.Run("WriteStorage error", func(t *testing.T) {
 		store := stubStore{LinkStore: mustTempStorage(t, "[]"), writeErr: errors.New("write failed")}
 		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("https://example.com/y"))

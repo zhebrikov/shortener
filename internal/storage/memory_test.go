@@ -88,19 +88,6 @@ func TestMemoryStorage_GetLinkByShortCode(t *testing.T) {
 	}
 }
 
-func TestMemoryStorage_NextLinkUUID(t *testing.T) {
-	m := NewMemoryStorage()
-	u, err := m.NextLinkUUID()
-	if err != nil || u != 1 {
-		t.Fatalf("empty store NextLinkUUID() = (%d, %v), want (1, nil)", u, err)
-	}
-	_ = m.WriteStorage(Link{UUID: 7, ShortURL: "a", OriginalURL: "https://a.com"})
-	u, err = m.NextLinkUUID()
-	if err != nil || u != 8 {
-		t.Fatalf("NextLinkUUID() = (%d, %v), want (8, nil)", u, err)
-	}
-}
-
 func TestMemoryStorage_ReadStorage_ReturnsCopy(t *testing.T) {
 	m := NewMemoryStorage()
 	_ = m.WriteStorage(Link{UUID: 1, ShortURL: "x", OriginalURL: "https://x.com"})

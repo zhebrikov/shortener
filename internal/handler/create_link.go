@@ -32,9 +32,9 @@ func CreateLink(w http.ResponseWriter, r *http.Request, shortener *service.Short
 		return
 	}
 
-	nextUUID, err := store.NextLinkUUID()
+	nextUUID, err := storage.NewLinkUUID()
 	if err != nil {
-		http.Error(w, "Failed to read storage", http.StatusInternalServerError)
+		http.Error(w, "Failed to generate link id", http.StatusInternalServerError)
 		return
 	}
 

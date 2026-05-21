@@ -51,9 +51,9 @@ func CreateLinkJSON(
 		return
 	}
 
-	nextUUID, err := store.NextLinkUUID()
+	nextUUID, err := storage.NewLinkUUID()
 	if err != nil {
-		log.Printf("CreateLinkJSON: store.NextLinkUUID: %v", err)
+		log.Printf("CreateLinkJSON: storage.NewLinkUUID: %v", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}

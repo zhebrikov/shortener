@@ -38,8 +38,6 @@ type LinkStore interface {
 	SoftDeleteURLsByUser(userID string, shortCodes []string) error
 	// GetLinkByShortCode возвращает запись по коду из пути (суффикс short_url).
 	GetLinkByShortCode(shortCode string) (Link, error)
-	// NextLinkUUID возвращает UUID для следующей записи (1, если хранилище пустое).
-	NextLinkUUID() (int, error)
 }
 
 // Storage хранит ссылки в JSON-файле на диске.
@@ -239,16 +237,3 @@ func (s *Storage) GetLinkByShortCode(shortCode string) (Link, error) {
 	return Link{}, ErrLinkNotFound
 }
 
-// NextLinkUUID возвращает следующий порядковый UUID для новой записи.
-func (s *Storage) NextLinkUUID() (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	links, err := s.readStorageLocked()
-	if err != nil {
-		return 1, err
-	}
-	if len(links) == 0 {
-		return 1, nil
-	}
-	return links[len(links)-1].UUID + 1, nil
-}
