@@ -76,8 +76,8 @@ func TestCreateLink_auditAfter201(t *testing.T) {
 	if ev.UserID != "user-xyz" {
 		t.Errorf("user_id = %q", ev.UserID)
 	}
-	if ev.Ts <= 0 {
-		t.Errorf("ts = %d", ev.Ts)
+	if ev.TS <= 0 {
+		t.Errorf("ts = %d", ev.TS)
 	}
 }
 

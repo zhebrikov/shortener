@@ -13,7 +13,7 @@ func publishAudit(p *audit.Publisher, r *http.Request, action, rawURL string) {
 		return
 	}
 	ev := audit.Event{
-		Ts:     time.Now().Unix(),
+		TS:     time.Now().Unix(),
 		Action: action,
 		URL:    rawURL,
 	}
