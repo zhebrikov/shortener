@@ -27,6 +27,12 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	buildVersion string
+	buildDate    string
+	buildCommit  string
+)
+
 type Config struct {
 	ServerAddress string
 	BaseURL       string
@@ -133,7 +139,7 @@ func newApp(cfg Config) (*app, error) {
 		return nil, err
 	}
 
-	zapLog, err := logger.New("info")
+	zapLog, err := appLoggerNew("info")
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +189,7 @@ func run(args []string, listen func(string, http.Handler) error) error {
 		return err
 	}
 
-	cfg, err := getConfig(Config{
+	cfg, err := appGetConfig(Config{
 		ServerAddress: *serverAddrFlag,
 		BaseURL:       *baseURLFlag,
 		FileStorage:   *fileStorageFlag,
@@ -206,37 +212,60 @@ func run(args []string, listen func(string, http.Handler) error) error {
 	return listen(application.Port, application.Handler)
 }
 
-// osExit, appListen и dbConnect подменяются в тестах.
+func defaultMigrateUp(m *migrate.Migrate) error {
+	return m.Up()
+}
+
+// osExit, appListen, dbConnect и др. подменяются в тестах.
 var (
-	osExit     = os.Exit
-	appListen  = http.ListenAndServe
-	dbConnect  = postgresql.Connection
-	runMigrate = runMigrations
+	osExit       = os.Exit
+	appListen    = http.ListenAndServe
+	dbConnect    = postgresql.Connection
+	runMigrate   = runMigrations
+	appGetConfig = getConfig
+	appLoggerNew = logger.New
+	migrateNew   = migrate.New
+	migrateUp    = defaultMigrateUp
+	migrateClose = func(m *migrate.Migrate) { _, _ = m.Close() }
 )
 
 func runMigrations(migrationsPath, dsn string) error {
 	if abs, err := filepath.Abs(migrationsPath); err == nil {
 		migrationsPath = abs
 	}
-	m, err := migrate.New("file://"+migrationsPath, dsn)
+	m, err := migrateNew("file://"+migrationsPath, dsn)
 	if err != nil {
 		migrationsPath = "../migrations"
 		if abs, err := filepath.Abs(migrationsPath); err == nil {
 			migrationsPath = abs
 		}
-		m, err = migrate.New("file://"+migrationsPath, dsn)
+		m, err = migrateNew("file://"+migrationsPath, dsn)
 		if err != nil {
 			return err
 		}
 	}
-	defer func() { _, _ = m.Close() }()
-	if errUp := m.Up(); errUp != nil && errUp != migrate.ErrNoChange {
+	defer migrateClose(m)
+	if errUp := migrateUp(m); errUp != nil && errUp != migrate.ErrNoChange {
 		return errUp
 	}
 	return nil
 }
 
+func buildInfoOrNA(s string) string {
+	if s == "" {
+		return "N/A"
+	}
+	return s
+}
+
+func printBuildInfo() {
+	fmt.Println("Build version:", buildInfoOrNA(buildVersion))
+	fmt.Println("Build date:", buildInfoOrNA(buildDate))
+	fmt.Println("Build commit:", buildInfoOrNA(buildCommit))
+}
+
 func main() {
+	printBuildInfo()
 	osExit(exitCode(os.Args[1:], appListen))
 }
 
