@@ -2,6 +2,7 @@ package main
 
 import (
 	"go/ast"
+	"go/types"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,16 +12,12 @@ import (
 
 var noosexitinmainAnalyzer = &analysis.Analyzer{
 	Name: "noosexitinmain",
-	Doc:  "reports direct os.Exit calls in main.main",
+	Doc:  "reports os.Exit, log.Fatal and panic calls outside main.main in package main",
 	Run:  runNoOSExitInMain,
 }
 
 func runNoOSExitInMain(pass *analysis.Pass) (any, error) {
 	if pass.Pkg.Name() != "main" {
-		return nil, nil
-	}
-	if pass.Pkg.Path() != "github.com/zhebrikov/shortener" &&
-		!strings.HasPrefix(pass.Pkg.Path(), "github.com/zhebrikov/shortener/") {
 		return nil, nil
 	}
 	workspaceRoot, err := os.Getwd()
@@ -40,13 +37,17 @@ func runNoOSExitInMain(pass *analysis.Pass) (any, error) {
 		}
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Recv != nil || fn.Name.Name != "main" || fn.Body == nil {
+			if !ok || fn.Recv != nil || fn.Body == nil || fn.Name.Name == "main" {
 				continue
 			}
 
 			ast.Inspect(fn.Body, func(node ast.Node) bool {
 				call, ok := node.(*ast.CallExpr)
 				if !ok {
+					return true
+				}
+				if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "panic" {
+					pass.Reportf(call.Pos(), "panic must not be called outside main.main")
 					return true
 				}
 				selector, ok := call.Fun.(*ast.SelectorExpr)
@@ -57,8 +58,20 @@ func runNoOSExitInMain(pass *analysis.Pass) (any, error) {
 				if !ok {
 					return true
 				}
-				if pkgIdent.Name == "os" && selector.Sel.Name == "Exit" {
-					pass.Reportf(call.Pos(), "direct os.Exit call is forbidden in main.main")
+				obj := pass.TypesInfo.Uses[pkgIdent]
+				pkgName, ok := obj.(*types.PkgName)
+				if !ok {
+					return true
+				}
+				switch pkgName.Imported().Path() {
+				case "os":
+					if selector.Sel.Name == "Exit" {
+						pass.Reportf(call.Pos(), "os.Exit must not be called outside main.main")
+					}
+				case "log":
+					if strings.HasPrefix(selector.Sel.Name, "Fatal") {
+						pass.Reportf(call.Pos(), "log.Fatal must not be called outside main.main")
+					}
 				}
 				return true
 			})

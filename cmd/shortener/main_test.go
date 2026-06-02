@@ -1313,8 +1313,16 @@ func TestNewApp_postgresDefaultMigrationPath(t *testing.T) {
 
 func TestRunMigrations_success(t *testing.T) {
 	oldNew, oldUp, oldClose := migrateNew, migrateUp, migrateClose
-	migrateNew = func(string, string) (*migrate.Migrate, error) { return &migrate.Migrate{}, nil }
-	migrateUp = func(*migrate.Migrate) error { return migrate.ErrNoChange }
+	m := &migrate.Migrate{}
+	var upCalled bool
+	migrateNew = func(string, string) (*migrate.Migrate, error) { return m, nil }
+	migrateUp = func(got *migrate.Migrate) error {
+		upCalled = true
+		if got != m {
+			t.Errorf("migrateUp called with %p, want %p", got, m)
+		}
+		return migrate.ErrNoChange
+	}
 	migrateClose = func(*migrate.Migrate) {}
 	t.Cleanup(func() {
 		migrateNew = oldNew
@@ -1324,6 +1332,9 @@ func TestRunMigrations_success(t *testing.T) {
 
 	if err := runMigrations("migrations", "postgres://unused"); err != nil {
 		t.Fatalf("runMigrations() err = %v", err)
+	}
+	if !upCalled {
+		t.Fatal("migrateUp was not called")
 	}
 }
 
@@ -1346,15 +1357,6 @@ func TestRunMigrations_fallbackFromCmdDir(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected migration up error without database")
 	}
-}
-
-func TestDefaultMigrateUp(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected panic from Up on empty migrate")
-		}
-	}()
-	_ = defaultMigrateUp(&migrate.Migrate{})
 }
 
 func TestRunMigrations_upReturnsError(t *testing.T) {

@@ -28,10 +28,10 @@
 //     - forcetypeassert: finds unsafe type assertions that can panic.
 //
 //  5. Custom project analyzer noosexitinmain.
-//     This analyzer forbids direct os.Exit(...) calls inside main.main
-//     in package main. The rule encourages returning an error from helper
-//     functions (for example run()) and handling process termination
-//     outside direct business logic.
+//     This analyzer forbids os.Exit, log.Fatal and panic calls outside
+//     main.main in package main. Process termination and unrecoverable
+//     failures should be handled in main.main; helper functions should
+//     return errors instead.
 //
 // Run:
 //
