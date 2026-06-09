@@ -22,17 +22,17 @@ func TestNewPublisher_emptyReturnsNil(t *testing.T) {
 
 func TestPublisher_nilSafe(t *testing.T) {
 	var p *Publisher
-	p.Publish(Event{Ts: 1, Action: ActionShorten, URL: "https://a"})
+	p.Publish(Event{TS: 1, Action: ActionShorten, URL: "https://a"})
 }
 
 func TestFileObserver_OnAudit_appendsSecondLine(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.log")
 	obs := NewFileObserver(path)
-	if err := obs.OnAudit(context.Background(), Event{Ts: 1, Action: ActionShorten, URL: "https://a"}); err != nil {
+	if err := obs.OnAudit(context.Background(), Event{TS: 1, Action: ActionShorten, URL: "https://a"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := obs.OnAudit(context.Background(), Event{Ts: 2, Action: ActionFollow, URL: "https://b"}); err != nil {
+	if err := obs.OnAudit(context.Background(), Event{TS: 2, Action: ActionFollow, URL: "https://b"}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -59,7 +59,7 @@ func TestFileObserver_OnAudit(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.log")
 	obs := NewFileObserver(path)
-	ev := Event{Ts: 42, Action: ActionShorten, UserID: "u1", URL: "https://example.com/x"}
+	ev := Event{TS: 42, Action: ActionShorten, UserID: "u1", URL: "https://example.com/x"}
 	if err := obs.OnAudit(context.Background(), ev); err != nil {
 		t.Fatalf("OnAudit: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestFileObserver_OnAudit(t *testing.T) {
 	if data[len(data)-1] != '\n' {
 		t.Errorf("want trailing newline")
 	}
-	if got.Ts != 42 || got.Action != ActionShorten || got.UserID != "u1" || got.URL != ev.URL {
+	if got.TS != 42 || got.Action != ActionShorten || got.UserID != "u1" || got.URL != ev.URL {
 		t.Errorf("got %+v, want %+v", got, ev)
 	}
 }
@@ -101,7 +101,7 @@ func TestHTTPObserver_OnAudit(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	obs := NewHTTPObserver(srv.URL, srv.Client())
-	ev := Event{Ts: 7, Action: ActionFollow, URL: "https://orig"}
+	ev := Event{TS: 7, Action: ActionFollow, URL: "https://orig"}
 	if err := obs.OnAudit(context.Background(), ev); err != nil {
 		t.Fatalf("OnAudit: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestPublisher_notifiesObservers(t *testing.T) {
 	o1 := chanObserver{ch: ch}
 	o2 := chanObserver{ch: ch}
 	p := NewPublisher(o1, o2)
-	p.Publish(Event{Ts: 1, Action: ActionShorten, URL: "https://z"})
+	p.Publish(Event{TS: 1, Action: ActionShorten, URL: "https://z"})
 	for i := 0; i < 2; i++ {
 		select {
 		case <-ch:
@@ -145,21 +145,21 @@ func (errObserver) OnAudit(context.Context, Event) error {
 
 func TestPublisher_observerErrorDoesNotPanic(t *testing.T) {
 	p := NewPublisher(errObserver{})
-	p.Publish(Event{Ts: 1, Action: ActionShorten, URL: "https://x"})
+	p.Publish(Event{TS: 1, Action: ActionShorten, URL: "https://x"})
 	time.Sleep(50 * time.Millisecond)
 }
 
 func TestFileObserver_OnAudit_invalidPath(t *testing.T) {
 	dir := t.TempDir()
 	obs := NewFileObserver(dir)
-	if err := obs.OnAudit(context.Background(), Event{Ts: 1, Action: ActionShorten, URL: "https://a"}); err == nil {
+	if err := obs.OnAudit(context.Background(), Event{TS: 1, Action: ActionShorten, URL: "https://a"}); err == nil {
 		t.Fatal("expected error when path is a directory")
 	}
 }
 
 func TestHTTPObserver_OnAudit_requestError(t *testing.T) {
 	obs := NewHTTPObserver("://bad-url", http.DefaultClient)
-	if err := obs.OnAudit(context.Background(), Event{Ts: 1, Action: ActionShorten, URL: "https://a"}); err == nil {
+	if err := obs.OnAudit(context.Background(), Event{TS: 1, Action: ActionShorten, URL: "https://a"}); err == nil {
 		t.Fatal("expected error for invalid URL")
 	}
 }
@@ -177,7 +177,7 @@ func TestFileObserver_OnAudit_writeError(t *testing.T) {
 	defer func() { auditAppender = old }()
 
 	obs := NewFileObserver(filepath.Join(t.TempDir(), "audit.log"))
-	if err := obs.OnAudit(context.Background(), Event{Ts: 1, Action: ActionShorten, URL: "https://a.com"}); err == nil {
+	if err := obs.OnAudit(context.Background(), Event{TS: 1, Action: ActionShorten, URL: "https://a.com"}); err == nil {
 		t.Fatal("expected write error")
 	}
 }
@@ -190,7 +190,7 @@ func TestFileObserver_OnAudit_closeError(t *testing.T) {
 	defer func() { auditAppender = old }()
 
 	obs := NewFileObserver(filepath.Join(t.TempDir(), "audit.log"))
-	if err := obs.OnAudit(context.Background(), Event{Ts: 1, Action: ActionShorten, URL: "https://a.com"}); err == nil {
+	if err := obs.OnAudit(context.Background(), Event{TS: 1, Action: ActionShorten, URL: "https://a.com"}); err == nil {
 		t.Fatal("expected close error")
 	}
 }
@@ -208,7 +208,7 @@ func TestFileObserver_OnAudit_readOnlyFileWriteError(t *testing.T) {
 	defer func() { auditAppender = old }()
 
 	obs := NewFileObserver(filepath.Join(t.TempDir(), "readonly.log"))
-	err := obs.OnAudit(context.Background(), Event{Ts: 1, Action: ActionShorten, URL: "https://a.com"})
+	err := obs.OnAudit(context.Background(), Event{TS: 1, Action: ActionShorten, URL: "https://a.com"})
 	if err == nil {
 		t.Fatal("expected error when audit file is not writable")
 	}
@@ -218,7 +218,7 @@ func TestHTTPObserver_OnAudit_networkError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	srv.Close()
 	obs := NewHTTPObserver(srv.URL, srv.Client())
-	if err := obs.OnAudit(context.Background(), Event{Ts: 1, Action: ActionShorten, URL: "https://a"}); err == nil {
+	if err := obs.OnAudit(context.Background(), Event{TS: 1, Action: ActionShorten, URL: "https://a"}); err == nil {
 		t.Fatal("expected error for closed server")
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"compress/gzip"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/go-chi/chi/v5"
+	"github.com/golang-migrate/migrate/v4"
 	"github.com/zhebrikov/shortener/internal/asyncdelete"
 	"github.com/zhebrikov/shortener/internal/audit"
 	"github.com/zhebrikov/shortener/internal/auth"
@@ -1131,5 +1134,243 @@ func TestNewApp_auditObservers(t *testing.T) {
 	}
 	if application.Handler == nil {
 		t.Fatal("handler is nil")
+	}
+}
+
+func TestBuildInfoOrNA(t *testing.T) {
+	if got := buildInfoOrNA(""); got != "N/A" {
+		t.Errorf("empty: got %q, want N/A", got)
+	}
+	if got := buildInfoOrNA("v1.0.0"); got != "v1.0.0" {
+		t.Errorf("value: got %q, want v1.0.0", got)
+	}
+}
+
+func TestPrintBuildInfo(t *testing.T) {
+	oldVersion, oldDate, oldCommit := buildVersion, buildDate, buildCommit
+	t.Cleanup(func() {
+		buildVersion = oldVersion
+		buildDate = oldDate
+		buildCommit = oldCommit
+	})
+
+	t.Run("N/A when empty", func(t *testing.T) {
+		buildVersion, buildDate, buildCommit = "", "", ""
+		out := captureStdout(t, printBuildInfo)
+		want := "Build version: N/A\nBuild date: N/A\nBuild commit: N/A\n"
+		if out != want {
+			t.Errorf("stdout:\n%q\nwant:\n%q", out, want)
+		}
+	})
+
+	t.Run("prints ldflags values", func(t *testing.T) {
+		buildVersion = "1.2.3"
+		buildDate = "2024-01-15"
+		buildCommit = "abc123"
+		out := captureStdout(t, printBuildInfo)
+		want := "Build version: 1.2.3\nBuild date: 2024-01-15\nBuild commit: abc123\n"
+		if out != want {
+			t.Errorf("stdout:\n%q\nwant:\n%q", out, want)
+		}
+	})
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	t.Cleanup(func() {
+		os.Stdout = old
+		_ = r.Close()
+		_ = w.Close()
+	})
+
+	done := make(chan struct{})
+	var buf bytes.Buffer
+	go func() {
+		_, _ = io.Copy(&buf, r)
+		close(done)
+	}()
+
+	fn()
+	_ = w.Close()
+	<-done
+	return buf.String()
+}
+
+func TestRun_getConfigError(t *testing.T) {
+	old := appGetConfig
+	appGetConfig = func(Config) (Config, error) {
+		return Config{}, errors.New("config error")
+	}
+	t.Cleanup(func() { appGetConfig = old })
+
+	if err := run(nil, func(string, http.Handler) error { return nil }); err == nil {
+		t.Fatal("expected config error")
+	}
+}
+
+func TestRun_listenError(t *testing.T) {
+	want := errors.New("listen failed")
+	err := run(nil, func(string, http.Handler) error { return want })
+	if !errors.Is(err, want) {
+		t.Fatalf("run() err = %v, want %v", err, want)
+	}
+}
+
+func TestNewApp_loggerError(t *testing.T) {
+	old := appLoggerNew
+	appLoggerNew = func(string) (*zap.Logger, error) {
+		return nil, errors.New("logger init failed")
+	}
+	t.Cleanup(func() { appLoggerNew = old })
+
+	if _, err := newApp(Config{
+		ServerAddress: "localhost:8090",
+		BaseURL:       "localhost:8090",
+	}); err == nil {
+		t.Fatal("expected logger error")
+	}
+}
+
+func TestNewApp_listUserURLs(t *testing.T) {
+	application, err := newApp(Config{
+		ServerAddress: "localhost:8091",
+		BaseURL:       "localhost:8091",
+		SecretKey:     "list-user-urls-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := json.Marshal(map[string]string{"url": "https://example.com/list-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	postReq := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
+	postReq.Header.Set("Content-Type", "application/json")
+	postRR := httptest.NewRecorder()
+	application.Handler.ServeHTTP(postRR, postReq)
+	if postRR.Code != http.StatusCreated {
+		t.Fatalf("POST /api/shorten: status %d", postRR.Code)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/user/urls", nil)
+	for _, c := range postRR.Result().Cookies() {
+		getReq.AddCookie(c)
+	}
+	getRR := httptest.NewRecorder()
+	application.Handler.ServeHTTP(getRR, getReq)
+
+	if getRR.Code != http.StatusOK {
+		t.Fatalf("GET /api/user/urls: status %d", getRR.Code)
+	}
+	var items []handler.UserURLItem
+	if err := json.NewDecoder(getRR.Body).Decode(&items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].OriginalURL != "https://example.com/list-user" {
+		t.Errorf("items = %+v", items)
+	}
+}
+
+func TestNewApp_postgresDefaultMigrationPath(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	var gotMigrationPath string
+	oldConnect := dbConnect
+	oldMigrate := runMigrate
+	dbConnect = func(string) (*sql.DB, error) { return db, nil }
+	runMigrate = func(path, dsn string) error {
+		gotMigrationPath = path
+		return nil
+	}
+	t.Cleanup(func() {
+		dbConnect = oldConnect
+		runMigrate = oldMigrate
+	})
+
+	if _, err := newApp(Config{
+		ServerAddress: "localhost:8092",
+		BaseURL:       "localhost:8092",
+		DatabaseDsn:   "postgres://mock",
+		MigrationPath: "",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if gotMigrationPath != "migrations" {
+		t.Errorf("migration path = %q, want migrations", gotMigrationPath)
+	}
+}
+
+func TestRunMigrations_success(t *testing.T) {
+	oldNew, oldUp, oldClose := migrateNew, migrateUp, migrateClose
+	m := &migrate.Migrate{}
+	var upCalled bool
+	migrateNew = func(string, string) (*migrate.Migrate, error) { return m, nil }
+	migrateUp = func(got *migrate.Migrate) error {
+		upCalled = true
+		if got != m {
+			t.Errorf("migrateUp called with %p, want %p", got, m)
+		}
+		return migrate.ErrNoChange
+	}
+	migrateClose = func(*migrate.Migrate) {}
+	t.Cleanup(func() {
+		migrateNew = oldNew
+		migrateUp = oldUp
+		migrateClose = oldClose
+	})
+
+	if err := runMigrations("migrations", "postgres://unused"); err != nil {
+		t.Fatalf("runMigrations() err = %v", err)
+	}
+	if !upCalled {
+		t.Fatal("migrateUp was not called")
+	}
+}
+
+func TestRunMigrations_fallbackFromCmdDir(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoMigrations := filepath.Join(wd, "..", "..", "migrations")
+	if _, err := os.Stat(repoMigrations); err != nil {
+		t.Skip("migrations directory not found")
+	}
+	cmdDir := filepath.Join(wd, "..")
+	if err := os.Chdir(cmdDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+
+	err = runMigrations("__invalid__", "postgres://127.0.0.1:1/nodb?connect_timeout=1")
+	if err == nil {
+		t.Fatal("expected migration up error without database")
+	}
+}
+
+func TestRunMigrations_upReturnsError(t *testing.T) {
+	oldNew, oldUp, oldClose := migrateNew, migrateUp, migrateClose
+	migrateNew = func(string, string) (*migrate.Migrate, error) { return &migrate.Migrate{}, nil }
+	migrateUp = func(*migrate.Migrate) error { return fmt.Errorf("migration up failed") }
+	migrateClose = func(*migrate.Migrate) {}
+	t.Cleanup(func() {
+		migrateNew = oldNew
+		migrateUp = oldUp
+		migrateClose = oldClose
+	})
+
+	if err := runMigrations("migrations", "postgres://unused"); err == nil {
+		t.Fatal("expected migration up error")
 	}
 }

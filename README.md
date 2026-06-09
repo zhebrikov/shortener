@@ -7,6 +7,38 @@
 1. Склонируйте репозиторий в любую подходящую директорию на вашем компьютере.
 2. В корне репозитория выполните команду `go mod init <name>` (где `<name>` — адрес вашего репозитория на GitHub без префикса `https://`) для создания модуля.
 
+## Сборка с метаданными версии
+
+При запуске `cmd/shortener` в stdout выводятся версия, дата и коммит сборки. По умолчанию для всех трёх полей используется `N/A`; при сборке их можно задать через `-ldflags` и флаг `-X` компилятора Go (значения переменных уровня пакета в `main` перезаписываются на этапе линковки).
+
+Сборка с подстановкой метаданных:
+
+```bash
+go build -ldflags "\
+  -X main.buildVersion=1.2.3 \
+  -X main.buildDate=2024-01-15T12:00:00Z \
+  -X 'main.buildCommit=abc123def'" \
+  -o shortener ./cmd/shortener
+```
+
+Дату сборки удобно подставлять из shell:
+
+```bash
+go build -ldflags "\
+  -X main.buildVersion=$(git describe --tags --always) \
+  -X main.buildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+  -X main.buildCommit=$(git rev-parse --short HEAD)" \
+  -o shortener ./cmd/shortener
+```
+
+Те же флаги работают с `go run`:
+
+```bash
+go run -ldflags "-X main.buildVersion=dev -X main.buildDate=local -X main.buildCommit=none" ./cmd/shortener
+```
+
+Имена переменных (`main.buildVersion`, `main.buildDate`, `main.buildCommit`) должны совпадать с объявлением в `cmd/shortener/main.go`. Значения с пробелами заключайте в кавычки, как в примере с `buildCommit`.
+
 ## Обновление шаблона
 
 Чтобы иметь возможность получать обновления автотестов и других частей шаблона, выполните команду:

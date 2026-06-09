@@ -22,14 +22,20 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	out := flag.String("output", "profiles/heap.pprof", "path to write heap profile")
 	links := flag.Int("links", 5000, "number of links to preload")
 	ops := flag.Int("ops", 50000, "number of read/create operations after preload")
 	flag.Parse()
 
 	if err := os.MkdirAll("profiles", 0o755); err != nil {
-		fmt.Fprintf(os.Stderr, "mkdir profiles: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mkdir profiles: %w", err)
 	}
 
 	shortener := service.NewShortener("http://localhost:8080")
@@ -39,21 +45,18 @@ func main() {
 		original := fmt.Sprintf("https://example.com/path/%d", i)
 		shortURL, err := shortener.CreateLink(original)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "CreateLink: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("CreateLink: %w", err)
 		}
 		uuid, err := storage.NewLinkUUID()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "NewLinkUUID: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("NewLinkUUID: %w", err)
 		}
 		if err := store.WriteStorage(storage.Link{
 			UUID:        uuid,
 			ShortURL:    shortURL,
 			OriginalURL: original,
 		}); err != nil {
-			fmt.Fprintf(os.Stderr, "WriteStorage: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("WriteStorage: %w", err)
 		}
 	}
 
@@ -70,8 +73,7 @@ func main() {
 		codes = append(codes, storage.ShortCodeFromURL(shortURL))
 	}
 	if len(codes) == 0 {
-		fmt.Fprintln(os.Stderr, "no sample short codes collected")
-		os.Exit(1)
+		return fmt.Errorf("no sample short codes collected")
 	}
 
 	jsonBody, _ := json.Marshal(handler.Input{URL: "https://bench.example/new"})
@@ -102,13 +104,12 @@ func main() {
 	runtime.GC()
 	f, err := os.Create(*out)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "create profile: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("create profile: %w", err)
 	}
 	defer f.Close()
 	if err := pprof.WriteHeapProfile(f); err != nil {
-		fmt.Fprintf(os.Stderr, "write heap profile: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("write heap profile: %w", err)
 	}
 	fmt.Printf("heap profile written to %s\n", *out)
+	return nil
 }
