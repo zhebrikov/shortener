@@ -19,6 +19,8 @@ type Worker struct {
 	in          chan item
 	tick        time.Duration
 	maxBatchLen int
+	quit        chan struct{}
+	done        chan struct{}
 }
 
 const (
@@ -34,9 +36,20 @@ func NewWorker(store storage.LinkStore) *Worker {
 		in:          make(chan item, defaultChanBuf),
 		tick:        defaultTick,
 		maxBatchLen: defaultMaxBatch,
+		quit:        make(chan struct{}),
+		done:        make(chan struct{}),
 	}
 	go w.run()
 	return w
+}
+
+// Shutdown останавливает воркер и сохраняет все необработанные удаления в хранилище.
+func (w *Worker) Shutdown() {
+	if w == nil {
+		return
+	}
+	close(w.quit)
+	<-w.done
 }
 
 // Submit ставит идентификаторы в очередь.
@@ -57,11 +70,16 @@ func (w *Worker) Submit(userID string, shortCodes []string) {
 }
 
 func (w *Worker) run() {
+	defer close(w.done)
 	batch := make(map[string][]string)
 	ticker := time.NewTicker(w.tick)
 	defer ticker.Stop()
 	for {
 		select {
+		case <-w.quit:
+			w.drain(batch)
+			w.flush(batch)
+			return
 		case it := <-w.in:
 			batch[it.userID] = append(batch[it.userID], it.code)
 			if batchLen(batch) >= w.maxBatchLen {
@@ -73,6 +91,17 @@ func (w *Worker) run() {
 				w.flush(batch)
 				batch = make(map[string][]string, w.maxBatchLen)
 			}
+		}
+	}
+}
+
+func (w *Worker) drain(batch map[string][]string) {
+	for {
+		select {
+		case it := <-w.in:
+			batch[it.userID] = append(batch[it.userID], it.code)
+		default:
+			return
 		}
 	}
 }

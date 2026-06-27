@@ -1,15 +1,18 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -200,8 +203,11 @@ func portFromServerAddress(serverAddress string) (string, error) {
 // app собирает HTTP-приложение из конфигурации (для main и тестов).
 type app struct {
 	Handler http.Handler
+	Addr    string
 	Port    string
 	Log     *zap.Logger
+	Deleter *asyncdelete.Worker
+	DB      *sql.DB
 }
 
 func newApp(cfg Config) (*app, error) {
@@ -270,10 +276,42 @@ func newApp(cfg Config) (*app, error) {
 	})
 	r.Delete("/api/user/urls", h.DeleteUserURLs)
 
-	return &app{Handler: r, Port: port, Log: zapLog}, nil
+	return &app{
+		Handler: r,
+		Addr:    cfg.ServerAddress,
+		Port:    port,
+		Log:     zapLog,
+		Deleter: deleter,
+		DB:      db,
+	}, nil
 }
 
-func run(args []string, listen func(string, http.Handler) error) error {
+// runDeps группирует зависимости для [run] (подменяются в тестах).
+type runDeps struct {
+	serve    func(srv *http.Server) error
+	serveTLS func(srv *http.Server, certFile, keyFile string) error
+	shutdown func(ctx context.Context, srv *http.Server) error
+	logSync  func(*zap.Logger) error
+}
+
+func defaultRunDeps() runDeps {
+	return runDeps{
+		serve: func(srv *http.Server) error {
+			return srv.ListenAndServe()
+		},
+		serveTLS: func(srv *http.Server, certFile, keyFile string) error {
+			return srv.ListenAndServeTLS(certFile, keyFile)
+		},
+		shutdown: func(ctx context.Context, srv *http.Server) error {
+			return srv.Shutdown(ctx)
+		},
+		logSync: func(l *zap.Logger) error {
+			return l.Sync()
+		},
+	}
+}
+
+func run(ctx context.Context, args []string, d runDeps) error {
 	fs := flag.NewFlagSet("shortener", flag.ContinueOnError)
 	var configPathFlag string
 	fs.StringVar(&configPathFlag, "c", "", "path to JSON config file (CONFIG)")
@@ -329,30 +367,66 @@ func run(args []string, listen func(string, http.Handler) error) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if application.DB != nil {
+			_ = application.DB.Close()
+		}
+	}()
 
 	scheme := "http"
 	if cfg.EnableHTTPS {
 		scheme = "https"
 	}
 	application.Log.Info("server started", zap.String("address", scheme+"://localhost"+application.Port))
-	if cfg.EnableHTTPS {
-		return appListenTLS(application.Port, application.Handler)
+
+	srv := &http.Server{Addr: application.Addr, Handler: application.Handler}
+	serveErr := make(chan error, 1)
+	go func() {
+		var errServe error
+		if cfg.EnableHTTPS {
+			errServe = d.serveTLS(srv, defaultTLSCertFile, defaultTLSKeyFile)
+		} else {
+			errServe = d.serve(srv)
+		}
+		if errServe != nil && errServe != http.ErrServerClosed {
+			serveErr <- errServe
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+	case err := <-serveErr:
+		return err
 	}
-	return listen(application.Port, application.Handler)
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	sd := d.shutdown
+	if sd == nil {
+		sd = func(ctx context.Context, srv *http.Server) error { return srv.Shutdown(ctx) }
+	}
+	if err := sd(shutdownCtx, srv); err != nil {
+		log.Printf("server shutdown: %v", err)
+	}
+	application.Deleter.Shutdown()
+	if syncFn := d.logSync; syncFn != nil {
+		_ = syncFn(application.Log)
+	}
+	return nil
 }
 
 func defaultMigrateUp(m *migrate.Migrate) error {
 	return m.Up()
 }
 
-// osExit, appListen, dbConnect и др. подменяются в тестах.
+// osExit, dbConnect и др. подменяются в тестах.
 var (
-	osExit       = os.Exit
-	appListen    = http.ListenAndServe
-	appListenTLS = func(addr string, handler http.Handler) error {
-		return http.ListenAndServeTLS(addr, defaultTLSCertFile, defaultTLSKeyFile, handler)
+	osExit         = os.Exit
+	runDepsFactory = defaultRunDeps
+	notifyContext  = func() (context.Context, context.CancelFunc) {
+		return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	}
-	dbConnect    = postgresql.Connection
+	dbConnect      = postgresql.Connection
 	runMigrate   = runMigrations
 	appGetConfig = getConfig
 	appLoggerNew = logger.New
@@ -398,11 +472,13 @@ func printBuildInfo() {
 
 func main() {
 	printBuildInfo()
-	osExit(exitCode(os.Args[1:], appListen))
+	ctx, stop := notifyContext()
+	defer stop()
+	osExit(exitCode(ctx, os.Args[1:]))
 }
 
-func exitCode(args []string, listen func(string, http.Handler) error) int {
-	if err := run(args, listen); err != nil {
+func exitCode(ctx context.Context, args []string) int {
+	if err := run(ctx, args, runDepsFactory()); err != nil {
 		log.Print(err)
 		return 1
 	}

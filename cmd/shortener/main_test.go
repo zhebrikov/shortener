@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -46,6 +48,49 @@ func storageFromTestFile(t *testing.T) *storage.Storage {
 	}
 	f.Close()
 	return storage.NewStorage(f.Name())
+}
+
+func runWithDeps(args []string, d runDeps) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return run(ctx, args, d)
+}
+
+func runUntilCancel(args []string, d runDeps) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	origServe := d.serve
+	if origServe == nil {
+		origServe = defaultRunDeps().serve
+	}
+	d.serve = func(srv *http.Server) error {
+		if err := origServe(srv); err != nil && err != http.ErrServerClosed {
+			return err
+		}
+		<-ctx.Done()
+		return nil
+	}
+
+	origServeTLS := d.serveTLS
+	if origServeTLS == nil {
+		origServeTLS = defaultRunDeps().serveTLS
+	}
+	d.serveTLS = func(srv *http.Server, certFile, keyFile string) error {
+		if err := origServeTLS(srv, certFile, keyFile); err != nil && err != http.ErrServerClosed {
+			return err
+		}
+		<-ctx.Done()
+		return nil
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- run(ctx, args, d)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	return <-errCh
 }
 
 func handlerFromMain(t *testing.T) *handler.ShortenerHandler {
@@ -330,21 +375,21 @@ func TestRun_configFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	oldListenTLS := appListenTLS
 	tlsCalled := false
-	appListenTLS = func(addr string, _ http.Handler) error {
+	d := defaultRunDeps()
+	d.serve = func(*http.Server) error {
+		t.Fatal("HTTP serve must not be called when config enables HTTPS")
+		return nil
+	}
+	d.serveTLS = func(srv *http.Server, _, _ string) error {
 		tlsCalled = true
-		if addr != ":9091" {
-			t.Errorf("listen addr = %q; want :9091", addr)
+		if srv.Addr != "localhost:9091" {
+			t.Errorf("listen addr = %q; want localhost:9091", srv.Addr)
 		}
 		return nil
 	}
-	t.Cleanup(func() { appListenTLS = oldListenTLS })
 
-	err := run([]string{"-c", configPath}, func(string, http.Handler) error {
-		t.Fatal("HTTP listen must not be called when config enables HTTPS")
-		return nil
-	})
+	err := runUntilCancel([]string{"-c", configPath}, d)
 	if err != nil {
 		t.Fatalf("run() err = %v", err)
 	}
@@ -362,15 +407,17 @@ func TestRun_configFileFlagOverridesFile(t *testing.T) {
 	}
 
 	var listenAddr string
-	err := run([]string{"-c", configPath, "-a", "localhost:7070"}, func(addr string, _ http.Handler) error {
-		listenAddr = addr
+	d := defaultRunDeps()
+	d.serve = func(srv *http.Server) error {
+		listenAddr = srv.Addr
 		return nil
-	})
+	}
+	err := runUntilCancel([]string{"-c", configPath, "-a", "localhost:7070"}, d)
 	if err != nil {
 		t.Fatalf("run() err = %v", err)
 	}
-	if listenAddr != ":7070" {
-		t.Errorf("listen addr = %q; want :7070", listenAddr)
+	if listenAddr != "localhost:7070" {
+		t.Errorf("listen addr = %q; want localhost:7070", listenAddr)
 	}
 }
 
@@ -393,15 +440,17 @@ func TestRun_configFileEnvOverridesFileAndFlag(t *testing.T) {
 	})
 
 	var listenAddr string
-	err := run([]string{"-c", configPath, "-a", "localhost:7070"}, func(addr string, _ http.Handler) error {
-		listenAddr = addr
+	d := defaultRunDeps()
+	d.serve = func(srv *http.Server) error {
+		listenAddr = srv.Addr
 		return nil
-	})
+	}
+	err := runUntilCancel([]string{"-c", configPath, "-a", "localhost:7070"}, d)
 	if err != nil {
 		t.Fatalf("run() err = %v", err)
 	}
-	if listenAddr != ":6060" {
-		t.Errorf("listen addr = %q; want :6060 from env", listenAddr)
+	if listenAddr != "localhost:6060" {
+		t.Errorf("listen addr = %q; want localhost:6060 from env", listenAddr)
 	}
 }
 
@@ -424,20 +473,22 @@ func TestRun_configPathFromEnv(t *testing.T) {
 	})
 
 	var listenAddr string
-	err := run(nil, func(addr string, _ http.Handler) error {
-		listenAddr = addr
+	d := defaultRunDeps()
+	d.serve = func(srv *http.Server) error {
+		listenAddr = srv.Addr
 		return nil
-	})
+	}
+	err := runUntilCancel(nil, d)
 	if err != nil {
 		t.Fatalf("run() err = %v", err)
 	}
-	if listenAddr != ":8088" {
-		t.Errorf("listen addr = %q; want :8088", listenAddr)
+	if listenAddr != "localhost:8088" {
+		t.Errorf("listen addr = %q; want localhost:8088", listenAddr)
 	}
 }
 
 func TestRun_configFileError(t *testing.T) {
-	if err := run([]string{"-c", "/nonexistent/config.json"}, func(string, http.Handler) error { return nil }); err == nil {
+	if err := runWithDeps([]string{"-c", "/nonexistent/config.json"}, defaultRunDeps()); err == nil {
 		t.Fatal("expected config file error")
 	}
 }
@@ -1179,42 +1230,50 @@ func TestNewApp_invalidServerAddress(t *testing.T) {
 }
 
 func TestRun_flagParseError(t *testing.T) {
-	err := run([]string{"-unknown-flag"}, func(string, http.Handler) error { return nil })
+	err := runWithDeps([]string{"-unknown-flag"}, defaultRunDeps())
 	if err == nil {
 		t.Fatal("expected flag parse error")
 	}
 }
 
 func TestRun_memoryStore(t *testing.T) {
-	err := run(nil, func(_ string, _ http.Handler) error {
-		return nil
-	})
+	err := runWithDeps(nil, defaultRunDeps())
 	if err != nil {
 		t.Fatalf("run() err = %v", err)
 	}
 }
 
 func TestRun_invalidAddress(t *testing.T) {
-	if err := run([]string{"-a", "bad-host"}, func(string, http.Handler) error { return nil }); err == nil {
+	if err := runWithDeps([]string{"-a", "bad-host"}, defaultRunDeps()); err == nil {
 		t.Fatal("expected error")
 	}
 }
 
 func TestRun_databaseConnectionError(t *testing.T) {
-	err := run([]string{"-d", "postgres://invalid:5432/nodb"}, func(string, http.Handler) error { return nil })
+	err := runWithDeps([]string{"-d", "postgres://invalid:5432/nodb"}, defaultRunDeps())
 	if err == nil {
 		t.Fatal("expected connection error")
 	}
 }
 
 func TestExitCode_success(t *testing.T) {
-	if exitCode(nil, func(string, http.Handler) error { return nil }) != 0 {
+	oldFactory := runDepsFactory
+	runDepsFactory = func() runDeps {
+		d := defaultRunDeps()
+		d.serve = func(*http.Server) error { return nil }
+		return d
+	}
+	t.Cleanup(func() { runDepsFactory = oldFactory })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if exitCode(ctx, nil) != 0 {
 		t.Fatal("expected exit code 0")
 	}
 }
 
 func TestExitCode_error(t *testing.T) {
-	if exitCode([]string{"-a", "invalid-no-port"}, func(string, http.Handler) error { return nil }) == 0 {
+	if exitCode(context.Background(), []string{"-a", "invalid-no-port"}) == 0 {
 		t.Fatal("expected non-zero exit code")
 	}
 }
@@ -1222,12 +1281,23 @@ func TestExitCode_error(t *testing.T) {
 func TestMain_callsExit(t *testing.T) {
 	var code int
 	oldExit := osExit
-	oldListen := appListen
+	oldFactory := runDepsFactory
+	oldNotify := notifyContext
 	osExit = func(c int) { code = c }
-	appListen = func(string, http.Handler) error { return nil }
+	runDepsFactory = func() runDeps {
+		d := defaultRunDeps()
+		d.serve = func(*http.Server) error { return nil }
+		return d
+	}
+	notifyContext = func() (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		return ctx, func() {}
+	}
 	defer func() {
 		osExit = oldExit
-		appListen = oldListen
+		runDepsFactory = oldFactory
+		notifyContext = oldNotify
 	}()
 
 	oldArgs := os.Args
@@ -1416,6 +1486,29 @@ func captureStdout(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
+func TestRun_shutdownOK(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d := defaultRunDeps()
+	d.serve = func(srv *http.Server) error {
+		return srv.Serve(ln)
+	}
+	d.logSync = func(*zap.Logger) error { return nil }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	if err := run(ctx, nil, d); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRun_getConfigError(t *testing.T) {
 	old := appGetConfig
 	appGetConfig = func(Config) (Config, error) {
@@ -1423,32 +1516,34 @@ func TestRun_getConfigError(t *testing.T) {
 	}
 	t.Cleanup(func() { appGetConfig = old })
 
-	if err := run(nil, func(string, http.Handler) error { return nil }); err == nil {
+	if err := runWithDeps(nil, defaultRunDeps()); err == nil {
 		t.Fatal("expected config error")
 	}
 }
 
 func TestRun_listenError(t *testing.T) {
 	want := errors.New("listen failed")
-	err := run(nil, func(string, http.Handler) error { return want })
+	d := defaultRunDeps()
+	d.serve = func(*http.Server) error { return want }
+	err := run(context.Background(), nil, d)
 	if !errors.Is(err, want) {
 		t.Fatalf("run() err = %v, want %v", err, want)
 	}
 }
 
 func TestRun_enableHTTPS(t *testing.T) {
-	oldListenTLS := appListenTLS
 	tlsCalled := false
-	appListenTLS = func(string, http.Handler) error {
+	d := defaultRunDeps()
+	d.serve = func(*http.Server) error {
+		t.Fatal("HTTP serve must not be called when HTTPS is enabled")
+		return nil
+	}
+	d.serveTLS = func(*http.Server, string, string) error {
 		tlsCalled = true
 		return nil
 	}
-	t.Cleanup(func() { appListenTLS = oldListenTLS })
 
-	err := run([]string{"-s"}, func(string, http.Handler) error {
-		t.Fatal("HTTP listen must not be called when HTTPS is enabled")
-		return nil
-	})
+	err := runUntilCancel([]string{"-s"}, d)
 	if err != nil {
 		t.Fatalf("run() err = %v", err)
 	}
@@ -1458,16 +1553,19 @@ func TestRun_enableHTTPS(t *testing.T) {
 }
 
 func TestRun_enableHTTPSFromEnv(t *testing.T) {
-	oldListenTLS := appListenTLS
 	oldHTTPS, httpsOk := os.LookupEnv("ENABLE_HTTPS")
 	os.Setenv("ENABLE_HTTPS", "true")
 	tlsCalled := false
-	appListenTLS = func(string, http.Handler) error {
+	d := defaultRunDeps()
+	d.serve = func(*http.Server) error {
+		t.Fatal("HTTP serve must not be called when ENABLE_HTTPS is set")
+		return nil
+	}
+	d.serveTLS = func(*http.Server, string, string) error {
 		tlsCalled = true
 		return nil
 	}
 	t.Cleanup(func() {
-		appListenTLS = oldListenTLS
 		if httpsOk {
 			os.Setenv("ENABLE_HTTPS", oldHTTPS)
 		} else {
@@ -1475,10 +1573,7 @@ func TestRun_enableHTTPSFromEnv(t *testing.T) {
 		}
 	})
 
-	err := run(nil, func(string, http.Handler) error {
-		t.Fatal("HTTP listen must not be called when ENABLE_HTTPS is set")
-		return nil
-	})
+	err := runUntilCancel(nil, d)
 	if err != nil {
 		t.Fatalf("run() err = %v", err)
 	}

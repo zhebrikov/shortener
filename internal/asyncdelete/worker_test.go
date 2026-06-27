@@ -84,6 +84,24 @@ func TestWorker_largeBatchFlush(t *testing.T) {
 	t.Fatal("expected all user links to be soft-deleted")
 }
 
+func TestWorker_shutdownFlushesPending(t *testing.T) {
+	store := storage.NewMemoryStorage()
+	_ = store.WriteStorage(storage.Link{
+		UUID: 1, ShortURL: "http://localhost/c1", OriginalURL: "https://a.com", UserID: "u1",
+	})
+	w := NewWorker(store)
+	w.Submit("u1", []string{"c1"})
+	w.Shutdown()
+
+	link, err := store.GetLinkByShortCode("c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !link.IsDeleted {
+		t.Fatal("expected link to be soft-deleted after Shutdown")
+	}
+}
+
 func TestWorker_flushError(t *testing.T) {
 	store := &errDeleteStore{MemoryStorage: storage.NewMemoryStorage()}
 	w := NewWorker(store)
