@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +34,11 @@ var (
 	buildCommit  = "N/A"
 )
 
+const (
+	defaultTLSCertFile = "server.crt"
+	defaultTLSKeyFile  = "server.key"
+)
+
 type Config struct {
 	ServerAddress string
 	BaseURL       string
@@ -42,6 +48,7 @@ type Config struct {
 	SecretKey     string
 	AuditFile     string
 	AuditURL      string
+	EnableHTTPS   bool
 }
 
 // getConfig возвращает конфиг: переменные окружения имеют приоритет, иначе используются значения по умолчанию (defaults).
@@ -78,6 +85,14 @@ func getConfig(defaults Config) (Config, error) {
 	if !ok || auditURL == "" {
 		auditURL = defaults.AuditURL
 	}
+	enableHTTPS := defaults.EnableHTTPS
+	if v, ok := os.LookupEnv("ENABLE_HTTPS"); ok && v != "" {
+		parsed, err := strconv.ParseBool(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid ENABLE_HTTPS: %w", err)
+		}
+		enableHTTPS = parsed
+	}
 	return Config{
 		ServerAddress: serverAddress,
 		BaseURL:       baseURL,
@@ -87,6 +102,7 @@ func getConfig(defaults Config) (Config, error) {
 		SecretKey:     secretKey,
 		AuditFile:     auditFile,
 		AuditURL:      auditURL,
+		EnableHTTPS:   enableHTTPS,
 	}, nil
 }
 
@@ -185,6 +201,7 @@ func run(args []string, listen func(string, http.Handler) error) error {
 	secretKeyFlag := fs.String("k", "", "secret key for signed user cookie (or SECRET_KEY env)")
 	auditFileFlag := fs.String("audit-file", "", "append-only audit log file path (or AUDIT_FILE env; empty = disabled)")
 	auditURLFlag := fs.String("audit-url", "", "remote audit sink POST URL (or AUDIT_URL env; empty = disabled)")
+	enableHTTPSFlag := fs.Bool("s", false, "enable HTTPS (or ENABLE_HTTPS env)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -198,6 +215,7 @@ func run(args []string, listen func(string, http.Handler) error) error {
 		SecretKey:     *secretKeyFlag,
 		AuditFile:     *auditFileFlag,
 		AuditURL:      *auditURLFlag,
+		EnableHTTPS:   *enableHTTPSFlag,
 	})
 	if err != nil {
 		return err
@@ -208,7 +226,14 @@ func run(args []string, listen func(string, http.Handler) error) error {
 		return err
 	}
 
-	application.Log.Info("server started", zap.String("address", "http://localhost"+application.Port))
+	scheme := "http"
+	if cfg.EnableHTTPS {
+		scheme = "https"
+	}
+	application.Log.Info("server started", zap.String("address", scheme+"://localhost"+application.Port))
+	if cfg.EnableHTTPS {
+		return appListenTLS(application.Port, application.Handler)
+	}
 	return listen(application.Port, application.Handler)
 }
 
@@ -220,6 +245,9 @@ func defaultMigrateUp(m *migrate.Migrate) error {
 var (
 	osExit       = os.Exit
 	appListen    = http.ListenAndServe
+	appListenTLS = func(addr string, handler http.Handler) error {
+		return http.ListenAndServeTLS(addr, defaultTLSCertFile, defaultTLSKeyFile, handler)
+	}
 	dbConnect    = postgresql.Connection
 	runMigrate   = runMigrations
 	appGetConfig = getConfig

@@ -230,6 +230,48 @@ func TestGetConfig(t *testing.T) {
 			t.Errorf("AuditURL = %q", got.AuditURL)
 		}
 	})
+
+	t.Run("ENABLE_HTTPS from env", func(t *testing.T) {
+		oldHTTPS, httpsOk := saveEnv("ENABLE_HTTPS")
+		os.Setenv("ENABLE_HTTPS", "true")
+		defer restoreEnv("ENABLE_HTTPS", oldHTTPS, httpsOk)
+
+		got, err := getConfig(defaultCfg)
+		if err != nil {
+			t.Fatalf("getConfig() unexpected error: %v", err)
+		}
+		if !got.EnableHTTPS {
+			t.Errorf("getConfig() EnableHTTPS = false; want true")
+		}
+	})
+
+	t.Run("missing ENABLE_HTTPS uses default from flags", func(t *testing.T) {
+		oldHTTPS, httpsOk := saveEnv("ENABLE_HTTPS")
+		os.Unsetenv("ENABLE_HTTPS")
+		defer restoreEnv("ENABLE_HTTPS", oldHTTPS, httpsOk)
+
+		got, err := getConfig(Config{
+			ServerAddress: "localhost:8080",
+			BaseURL:       "http://example.com",
+			EnableHTTPS:   true,
+		})
+		if err != nil {
+			t.Fatalf("getConfig: %v", err)
+		}
+		if !got.EnableHTTPS {
+			t.Error("EnableHTTPS = false; want true from defaults")
+		}
+	})
+
+	t.Run("invalid ENABLE_HTTPS returns error", func(t *testing.T) {
+		oldHTTPS, httpsOk := saveEnv("ENABLE_HTTPS")
+		os.Setenv("ENABLE_HTTPS", "not-a-bool")
+		defer restoreEnv("ENABLE_HTTPS", oldHTTPS, httpsOk)
+
+		if _, err := getConfig(defaultCfg); err == nil {
+			t.Fatal("expected error for invalid ENABLE_HTTPS")
+		}
+	})
 }
 
 func TestPortFromServerAddress(t *testing.T) {
@@ -1219,6 +1261,57 @@ func TestRun_listenError(t *testing.T) {
 	err := run(nil, func(string, http.Handler) error { return want })
 	if !errors.Is(err, want) {
 		t.Fatalf("run() err = %v, want %v", err, want)
+	}
+}
+
+func TestRun_enableHTTPS(t *testing.T) {
+	oldListenTLS := appListenTLS
+	tlsCalled := false
+	appListenTLS = func(string, http.Handler) error {
+		tlsCalled = true
+		return nil
+	}
+	t.Cleanup(func() { appListenTLS = oldListenTLS })
+
+	err := run([]string{"-s"}, func(string, http.Handler) error {
+		t.Fatal("HTTP listen must not be called when HTTPS is enabled")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("run() err = %v", err)
+	}
+	if !tlsCalled {
+		t.Fatal("expected appListenTLS to be called")
+	}
+}
+
+func TestRun_enableHTTPSFromEnv(t *testing.T) {
+	oldListenTLS := appListenTLS
+	oldHTTPS, httpsOk := os.LookupEnv("ENABLE_HTTPS")
+	os.Setenv("ENABLE_HTTPS", "true")
+	tlsCalled := false
+	appListenTLS = func(string, http.Handler) error {
+		tlsCalled = true
+		return nil
+	}
+	t.Cleanup(func() {
+		appListenTLS = oldListenTLS
+		if httpsOk {
+			os.Setenv("ENABLE_HTTPS", oldHTTPS)
+		} else {
+			os.Unsetenv("ENABLE_HTTPS")
+		}
+	})
+
+	err := run(nil, func(string, http.Handler) error {
+		t.Fatal("HTTP listen must not be called when ENABLE_HTTPS is set")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("run() err = %v", err)
+	}
+	if !tlsCalled {
+		t.Fatal("expected appListenTLS to be called")
 	}
 }
 
