@@ -19,6 +19,7 @@ import (
 	"github.com/zhebrikov/shortener/internal/asyncdelete"
 	"github.com/zhebrikov/shortener/internal/audit"
 	"github.com/zhebrikov/shortener/internal/auth"
+	appconfig "github.com/zhebrikov/shortener/internal/config"
 	"github.com/zhebrikov/shortener/internal/db/postgresql"
 	"github.com/zhebrikov/shortener/internal/handler"
 	"github.com/zhebrikov/shortener/internal/logger"
@@ -35,8 +36,12 @@ var (
 )
 
 const (
-	defaultTLSCertFile = "server.crt"
-	defaultTLSKeyFile  = "server.key"
+	defaultTLSCertFile   = "server.crt"
+	defaultTLSKeyFile    = "server.key"
+	envConfigPath        = "CONFIG"
+	defaultServerAddress = "localhost:8080"
+	defaultBaseURL       = "localhost:8080"
+	defaultMigrationPath = "migrations"
 )
 
 type Config struct {
@@ -49,6 +54,83 @@ type Config struct {
 	AuditFile     string
 	AuditURL      string
 	EnableHTTPS   bool
+}
+
+func defaultConfig() Config {
+	return Config{
+		ServerAddress: defaultServerAddress,
+		BaseURL:       defaultBaseURL,
+		MigrationPath: defaultMigrationPath,
+	}
+}
+
+func configPathFromEnvOrFlag(flagPath string) string {
+	if v := os.Getenv(envConfigPath); v != "" {
+		return v
+	}
+	return flagPath
+}
+
+func applyFileConfig(cfg Config, file appconfig.File) Config {
+	if file.ServerAddress != nil {
+		cfg.ServerAddress = *file.ServerAddress
+	}
+	if file.BaseURL != nil {
+		cfg.BaseURL = *file.BaseURL
+	}
+	if file.FileStoragePath != nil {
+		cfg.FileStorage = *file.FileStoragePath
+	}
+	if file.DatabaseDSN != nil {
+		cfg.DatabaseDsn = *file.DatabaseDSN
+	}
+	if file.MigrationsPath != nil {
+		cfg.MigrationPath = *file.MigrationsPath
+	}
+	if file.SecretKey != nil {
+		cfg.SecretKey = *file.SecretKey
+	}
+	if file.AuditFile != nil {
+		cfg.AuditFile = *file.AuditFile
+	}
+	if file.AuditURL != nil {
+		cfg.AuditURL = *file.AuditURL
+	}
+	if file.EnableHTTPS != nil {
+		cfg.EnableHTTPS = *file.EnableHTTPS
+	}
+	return cfg
+}
+
+func applyVisitedFlags(cfg Config, visited map[string]bool, flags Config) Config {
+	if visited["a"] {
+		cfg.ServerAddress = flags.ServerAddress
+	}
+	if visited["b"] {
+		cfg.BaseURL = flags.BaseURL
+	}
+	if visited["f"] {
+		cfg.FileStorage = flags.FileStorage
+	}
+	if visited["d"] {
+		cfg.DatabaseDsn = flags.DatabaseDsn
+	}
+	if visited["m"] {
+		cfg.MigrationPath = flags.MigrationPath
+	}
+	if visited["k"] {
+		cfg.SecretKey = flags.SecretKey
+	}
+	if visited["audit-file"] {
+		cfg.AuditFile = flags.AuditFile
+	}
+	if visited["audit-url"] {
+		cfg.AuditURL = flags.AuditURL
+	}
+	if visited["s"] {
+		cfg.EnableHTTPS = flags.EnableHTTPS
+	}
+	return cfg
 }
 
 // getConfig возвращает конфиг: переменные окружения имеют приоритет, иначе используются значения по умолчанию (defaults).
@@ -193,11 +275,14 @@ func newApp(cfg Config) (*app, error) {
 
 func run(args []string, listen func(string, http.Handler) error) error {
 	fs := flag.NewFlagSet("shortener", flag.ContinueOnError)
-	serverAddrFlag := fs.String("a", "localhost:8080", "address of the HTTP server")
-	baseURLFlag := fs.String("b", "localhost:8080", "base URL for shortened links")
+	var configPathFlag string
+	fs.StringVar(&configPathFlag, "c", "", "path to JSON config file (CONFIG)")
+	fs.StringVar(&configPathFlag, "config", "", "path to JSON config file (CONFIG)")
+	serverAddrFlag := fs.String("a", defaultServerAddress, "address of the HTTP server")
+	baseURLFlag := fs.String("b", defaultBaseURL, "base URL for shortened links")
 	fileStorageFlag := fs.String("f", "", "file to store the links (empty = in-memory when no DB)")
 	databaseDsnFlag := fs.String("d", "", "database DSN")
-	migrationPathFlag := fs.String("m", "migrations", "path to the migrations")
+	migrationPathFlag := fs.String("m", defaultMigrationPath, "path to the migrations")
 	secretKeyFlag := fs.String("k", "", "secret key for signed user cookie (or SECRET_KEY env)")
 	auditFileFlag := fs.String("audit-file", "", "append-only audit log file path (or AUDIT_FILE env; empty = disabled)")
 	auditURLFlag := fs.String("audit-url", "", "remote audit sink POST URL (or AUDIT_URL env; empty = disabled)")
@@ -206,7 +291,23 @@ func run(args []string, listen func(string, http.Handler) error) error {
 		return err
 	}
 
-	cfg, err := appGetConfig(Config{
+	visited := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name != "c" && f.Name != "config" {
+			visited[f.Name] = true
+		}
+	})
+
+	cfg := defaultConfig()
+	if configPath := configPathFromEnvOrFlag(configPathFlag); configPath != "" {
+		fileCfg, err := appconfig.LoadFile(configPath)
+		if err != nil {
+			return err
+		}
+		cfg = applyFileConfig(cfg, fileCfg)
+	}
+
+	flagCfg := Config{
 		ServerAddress: *serverAddrFlag,
 		BaseURL:       *baseURLFlag,
 		FileStorage:   *fileStorageFlag,
@@ -216,7 +317,10 @@ func run(args []string, listen func(string, http.Handler) error) error {
 		AuditFile:     *auditFileFlag,
 		AuditURL:      *auditURLFlag,
 		EnableHTTPS:   *enableHTTPSFlag,
-	})
+	}
+	cfg = applyVisitedFlags(cfg, visited, flagCfg)
+
+	cfg, err := appGetConfig(cfg)
 	if err != nil {
 		return err
 	}

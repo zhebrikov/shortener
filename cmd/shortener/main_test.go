@@ -23,6 +23,7 @@ import (
 	"github.com/zhebrikov/shortener/internal/asyncdelete"
 	"github.com/zhebrikov/shortener/internal/audit"
 	"github.com/zhebrikov/shortener/internal/auth"
+	appconfig "github.com/zhebrikov/shortener/internal/config"
 	"github.com/zhebrikov/shortener/internal/handler"
 	"github.com/zhebrikov/shortener/internal/logger"
 	"github.com/zhebrikov/shortener/internal/middleware"
@@ -272,6 +273,177 @@ func TestGetConfig(t *testing.T) {
 			t.Fatal("expected error for invalid ENABLE_HTTPS")
 		}
 	})
+}
+
+func TestApplyFileConfig(t *testing.T) {
+	enableHTTPS := true
+	fileCfg := appconfig.File{
+		ServerAddress: strPtr("file:9090"),
+		BaseURL:       strPtr("http://file.example"),
+		EnableHTTPS:   &enableHTTPS,
+	}
+	got := applyFileConfig(defaultConfig(), fileCfg)
+	if got.ServerAddress != "file:9090" {
+		t.Errorf("ServerAddress = %q; want file:9090", got.ServerAddress)
+	}
+	if got.BaseURL != "http://file.example" {
+		t.Errorf("BaseURL = %q; want http://file.example", got.BaseURL)
+	}
+	if !got.EnableHTTPS {
+		t.Error("EnableHTTPS = false; want true")
+	}
+}
+
+func TestApplyVisitedFlags(t *testing.T) {
+	cfg := Config{
+		ServerAddress: "file:9090",
+		BaseURL:       "http://file.example",
+		EnableHTTPS:   true,
+	}
+	visited := map[string]bool{"a": true, "s": true}
+	flagCfg := Config{
+		ServerAddress: "flag:8080",
+		BaseURL:       "http://file.example",
+		EnableHTTPS:   false,
+	}
+	got := applyVisitedFlags(cfg, visited, flagCfg)
+	if got.ServerAddress != "flag:8080" {
+		t.Errorf("ServerAddress = %q; want flag:8080", got.ServerAddress)
+	}
+	if got.BaseURL != "http://file.example" {
+		t.Errorf("BaseURL = %q; want value from file when flag not visited", got.BaseURL)
+	}
+	if got.EnableHTTPS {
+		t.Error("EnableHTTPS = true; want false from visited flag")
+	}
+}
+
+func TestRun_configFile(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	content := `{
+		"server_address": "localhost:9091",
+		"base_url": "http://config.example",
+		"enable_https": true
+	}`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldListenTLS := appListenTLS
+	tlsCalled := false
+	appListenTLS = func(addr string, _ http.Handler) error {
+		tlsCalled = true
+		if addr != ":9091" {
+			t.Errorf("listen addr = %q; want :9091", addr)
+		}
+		return nil
+	}
+	t.Cleanup(func() { appListenTLS = oldListenTLS })
+
+	err := run([]string{"-c", configPath}, func(string, http.Handler) error {
+		t.Fatal("HTTP listen must not be called when config enables HTTPS")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("run() err = %v", err)
+	}
+	if !tlsCalled {
+		t.Fatal("expected appListenTLS to be called from config file")
+	}
+}
+
+func TestRun_configFileFlagOverridesFile(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	content := `{"server_address": "localhost:9091"}`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var listenAddr string
+	err := run([]string{"-c", configPath, "-a", "localhost:7070"}, func(addr string, _ http.Handler) error {
+		listenAddr = addr
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("run() err = %v", err)
+	}
+	if listenAddr != ":7070" {
+		t.Errorf("listen addr = %q; want :7070", listenAddr)
+	}
+}
+
+func TestRun_configFileEnvOverridesFileAndFlag(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	content := `{"server_address": "localhost:9091"}`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldAddr, addrOk := os.LookupEnv("SERVER_ADDRESS")
+	os.Setenv("SERVER_ADDRESS", "localhost:6060")
+	t.Cleanup(func() {
+		if addrOk {
+			os.Setenv("SERVER_ADDRESS", oldAddr)
+		} else {
+			os.Unsetenv("SERVER_ADDRESS")
+		}
+	})
+
+	var listenAddr string
+	err := run([]string{"-c", configPath, "-a", "localhost:7070"}, func(addr string, _ http.Handler) error {
+		listenAddr = addr
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("run() err = %v", err)
+	}
+	if listenAddr != ":6060" {
+		t.Errorf("listen addr = %q; want :6060 from env", listenAddr)
+	}
+}
+
+func TestRun_configPathFromEnv(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	content := `{"server_address": "localhost:8088"}`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldConfig, configOk := os.LookupEnv("CONFIG")
+	os.Setenv("CONFIG", configPath)
+	t.Cleanup(func() {
+		if configOk {
+			os.Setenv("CONFIG", oldConfig)
+		} else {
+			os.Unsetenv("CONFIG")
+		}
+	})
+
+	var listenAddr string
+	err := run(nil, func(addr string, _ http.Handler) error {
+		listenAddr = addr
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("run() err = %v", err)
+	}
+	if listenAddr != ":8088" {
+		t.Errorf("listen addr = %q; want :8088", listenAddr)
+	}
+}
+
+func TestRun_configFileError(t *testing.T) {
+	if err := run([]string{"-c", "/nonexistent/config.json"}, func(string, http.Handler) error { return nil }); err == nil {
+		t.Fatal("expected config file error")
+	}
+}
+
+func strPtr(s string) *string {
+	return &s
 }
 
 func TestPortFromServerAddress(t *testing.T) {
