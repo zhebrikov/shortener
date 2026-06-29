@@ -45,9 +45,6 @@ func NewWorker(store storage.LinkStore) *Worker {
 
 // Shutdown останавливает воркер и сохраняет все необработанные удаления в хранилище.
 func (w *Worker) Shutdown() {
-	if w == nil {
-		return
-	}
 	close(w.quit)
 	<-w.done
 }
@@ -58,7 +55,7 @@ func (w *Worker) Shutdown() {
 // "пишущих" горутин. При заполненной очереди вызов может заблокироваться
 // (backpressure).
 func (w *Worker) Submit(userID string, shortCodes []string) {
-	if w == nil || userID == "" || len(shortCodes) == 0 {
+	if userID == "" || len(shortCodes) == 0 {
 		return
 	}
 	for _, c := range shortCodes {

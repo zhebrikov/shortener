@@ -53,18 +53,36 @@ func storageFromTestFile(t *testing.T) *storage.Storage {
 func runWithDeps(args []string, d runDeps) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	return run(ctx, args, d)
+	return run(ctx, args, d, getConfig, defaultAppDeps())
+}
+
+func waitUntilListen(addr string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 50*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return fmt.Errorf("timed out waiting for listener on %s", addr)
 }
 
 func runUntilCancel(args []string, d runDeps) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	ready := make(chan struct{})
+	var readyOnce sync.Once
+	signalReady := func() { readyOnce.Do(func() { close(ready) }) }
+
 	origServe := d.serve
 	if origServe == nil {
 		origServe = defaultRunDeps().serve
 	}
 	d.serve = func(srv *http.Server) error {
+		signalReady()
 		if err := origServe(srv); err != nil && err != http.ErrServerClosed {
 			return err
 		}
@@ -77,6 +95,7 @@ func runUntilCancel(args []string, d runDeps) error {
 		origServeTLS = defaultRunDeps().serveTLS
 	}
 	d.serveTLS = func(srv *http.Server, certFile, keyFile string) error {
+		signalReady()
 		if err := origServeTLS(srv, certFile, keyFile); err != nil && err != http.ErrServerClosed {
 			return err
 		}
@@ -86,9 +105,21 @@ func runUntilCancel(args []string, d runDeps) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- run(ctx, args, d)
+		errCh <- run(ctx, args, d, getConfig, defaultAppDeps())
 	}()
-	time.Sleep(50 * time.Millisecond)
+
+	select {
+	case <-ready:
+	case err := <-errCh:
+		return err
+	case <-time.After(5 * time.Second):
+		cancel()
+		if err := <-errCh; err != nil {
+			return err
+		}
+		return fmt.Errorf("timeout waiting for server to start")
+	}
+
 	cancel()
 	return <-errCh
 }
@@ -318,6 +349,51 @@ func TestGetConfig(t *testing.T) {
 			t.Fatal("expected error for invalid ENABLE_HTTPS")
 		}
 	})
+
+	t.Run("TLS_CERT and TLS_KEY from env", func(t *testing.T) {
+		oldCert, certOk := saveEnv("TLS_CERT")
+		oldKey, keyOk := saveEnv("TLS_KEY")
+		os.Setenv("TLS_CERT", "/etc/ssl/cert.pem")
+		os.Setenv("TLS_KEY", "/etc/ssl/key.pem")
+		defer restoreEnv("TLS_CERT", oldCert, certOk)
+		defer restoreEnv("TLS_KEY", oldKey, keyOk)
+
+		got, err := getConfig(defaultCfg)
+		if err != nil {
+			t.Fatalf("getConfig() unexpected error: %v", err)
+		}
+		if got.TLSCertFile != "/etc/ssl/cert.pem" {
+			t.Errorf("getConfig() TLSCertFile = %q; want /etc/ssl/cert.pem", got.TLSCertFile)
+		}
+		if got.TLSKeyFile != "/etc/ssl/key.pem" {
+			t.Errorf("getConfig() TLSKeyFile = %q; want /etc/ssl/key.pem", got.TLSKeyFile)
+		}
+	})
+
+	t.Run("missing TLS_CERT and TLS_KEY use defaults", func(t *testing.T) {
+		oldCert, certOk := saveEnv("TLS_CERT")
+		oldKey, keyOk := saveEnv("TLS_KEY")
+		os.Unsetenv("TLS_CERT")
+		os.Unsetenv("TLS_KEY")
+		defer restoreEnv("TLS_CERT", oldCert, certOk)
+		defer restoreEnv("TLS_KEY", oldKey, keyOk)
+
+		got, err := getConfig(Config{
+			ServerAddress: "localhost:8080",
+			BaseURL:       "http://example.com",
+			TLSCertFile:   "/flags/cert.pem",
+			TLSKeyFile:    "/flags/key.pem",
+		})
+		if err != nil {
+			t.Fatalf("getConfig: %v", err)
+		}
+		if got.TLSCertFile != "/flags/cert.pem" {
+			t.Errorf("TLSCertFile = %q; want /flags/cert.pem", got.TLSCertFile)
+		}
+		if got.TLSKeyFile != "/flags/key.pem" {
+			t.Errorf("TLSKeyFile = %q; want /flags/key.pem", got.TLSKeyFile)
+		}
+	})
 }
 
 func TestApplyFileConfig(t *testing.T) {
@@ -345,11 +421,13 @@ func TestApplyVisitedFlags(t *testing.T) {
 		BaseURL:       "http://file.example",
 		EnableHTTPS:   true,
 	}
-	visited := map[string]bool{"a": true, "s": true}
+	visited := map[string]bool{"a": true, "s": true, "tls-cert": true, "tls-key": true}
 	flagCfg := Config{
 		ServerAddress: "flag:8080",
 		BaseURL:       "http://file.example",
 		EnableHTTPS:   false,
+		TLSCertFile:   "/flag/cert.pem",
+		TLSKeyFile:    "/flag/key.pem",
 	}
 	got := applyVisitedFlags(cfg, visited, flagCfg)
 	if got.ServerAddress != "flag:8080" {
@@ -360,6 +438,12 @@ func TestApplyVisitedFlags(t *testing.T) {
 	}
 	if got.EnableHTTPS {
 		t.Error("EnableHTTPS = true; want false from visited flag")
+	}
+	if got.TLSCertFile != "/flag/cert.pem" {
+		t.Errorf("TLSCertFile = %q; want /flag/cert.pem", got.TLSCertFile)
+	}
+	if got.TLSKeyFile != "/flag/key.pem" {
+		t.Errorf("TLSKeyFile = %q; want /flag/key.pem", got.TLSKeyFile)
 	}
 }
 
@@ -451,6 +535,34 @@ func TestRun_configFileEnvOverridesFileAndFlag(t *testing.T) {
 	}
 	if listenAddr != "localhost:6060" {
 		t.Errorf("listen addr = %q; want localhost:6060 from env", listenAddr)
+	}
+}
+
+func TestConfigPathFromEnvOrFlag(t *testing.T) {
+	const flagPath = "/from/flag.json"
+
+	oldConfig, configOk := os.LookupEnv("CONFIG")
+	t.Cleanup(func() {
+		if configOk {
+			os.Setenv("CONFIG", oldConfig)
+		} else {
+			os.Unsetenv("CONFIG")
+		}
+	})
+
+	os.Unsetenv("CONFIG")
+	if got := configPathFromEnvOrFlag(flagPath); got != flagPath {
+		t.Errorf("unset env: got %q, want %q", got, flagPath)
+	}
+
+	os.Setenv("CONFIG", "/from/env.json")
+	if got := configPathFromEnvOrFlag(flagPath); got != "/from/env.json" {
+		t.Errorf("env set: got %q, want %q", got, "/from/env.json")
+	}
+
+	os.Setenv("CONFIG", "")
+	if got := configPathFromEnvOrFlag(flagPath); got != "" {
+		t.Errorf("empty env: got %q, want empty string", got)
 	}
 }
 
@@ -1187,7 +1299,7 @@ func TestNewApp_memoryStore(t *testing.T) {
 		ServerAddress: "localhost:8081",
 		BaseURL:       "localhost:8081",
 		AuditFile:     auditPath,
-	})
+	}, defaultAppDeps())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1211,7 +1323,7 @@ func TestNewApp_fileStore(t *testing.T) {
 		ServerAddress: "localhost:8082",
 		BaseURL:       "localhost:8082",
 		FileStorage:   filePath,
-	})
+	}, defaultAppDeps())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1224,7 +1336,7 @@ func TestNewApp_fileStore(t *testing.T) {
 }
 
 func TestNewApp_invalidServerAddress(t *testing.T) {
-	if _, err := newApp(Config{ServerAddress: "invalid-no-port", BaseURL: "localhost:8080"}); err == nil {
+	if _, err := newApp(Config{ServerAddress: "invalid-no-port", BaseURL: "localhost:8080"}, defaultAppDeps()); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -1257,56 +1369,41 @@ func TestRun_databaseConnectionError(t *testing.T) {
 }
 
 func TestExitCode_success(t *testing.T) {
-	oldFactory := runDepsFactory
-	runDepsFactory = func() runDeps {
-		d := defaultRunDeps()
-		d.serve = func(*http.Server) error { return nil }
-		return d
-	}
-	t.Cleanup(func() { runDepsFactory = oldFactory })
+	d := defaultRunDeps()
+	d.serve = func(*http.Server) error { return nil }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if exitCode(ctx, nil) != 0 {
+	if exitCode(ctx, nil, d, getConfig, defaultAppDeps()) != 0 {
 		t.Fatal("expected exit code 0")
 	}
 }
 
 func TestExitCode_error(t *testing.T) {
-	if exitCode(context.Background(), []string{"-a", "invalid-no-port"}) == 0 {
+	if exitCode(context.Background(), []string{"-a", "invalid-no-port"}, defaultRunDeps(), getConfig, defaultAppDeps()) == 0 {
 		t.Fatal("expected non-zero exit code")
 	}
 }
 
 func TestMain_callsExit(t *testing.T) {
 	var code int
-	oldExit := osExit
-	oldFactory := runDepsFactory
-	oldNotify := notifyContext
-	osExit = func(c int) { code = c }
-	runDepsFactory = func() runDeps {
-		d := defaultRunDeps()
-		d.serve = func(*http.Server) error { return nil }
-		return d
-	}
-	notifyContext = func() (context.Context, context.CancelFunc) {
+	md := defaultMainDeps()
+	md.exit = func(c int) { code = c }
+	md.runDeps = defaultRunDeps()
+	md.runDeps.serve = func(*http.Server) error { return nil }
+	md.notifyContext = func() (context.Context, context.CancelFunc) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		return ctx, func() {}
 	}
-	defer func() {
-		osExit = oldExit
-		runDepsFactory = oldFactory
-		notifyContext = oldNotify
-	}()
 
 	oldArgs := os.Args
 	defer func() { os.Args = oldArgs }()
 
 	os.Args = []string{"shortener-test"}
-	main()
+	runMain(md)
 	if code != 0 {
-		t.Fatalf("main() exit code = %d, want 0", code)
+		t.Fatalf("runMain() exit code = %d, want 0", code)
 	}
 }
 
@@ -1317,20 +1414,17 @@ func TestNewApp_postgresStore(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	oldConnect := dbConnect
-	oldMigrate := runMigrate
-	dbConnect = func(string) (*sql.DB, error) { return db, nil }
-	runMigrate = func(string, string) error { return nil }
-	defer func() {
-		dbConnect = oldConnect
-		runMigrate = oldMigrate
-	}()
+	ad := appDeps{
+		dbConnect:  func(string) (*sql.DB, error) { return db, nil },
+		runMigrate: func(string, string) error { return nil },
+		loggerNew:  logger.New,
+	}
 
 	application, err := newApp(Config{
 		ServerAddress: "localhost:8084",
 		BaseURL:       "localhost:8084",
 		DatabaseDsn:   "postgres://mock",
-	})
+	}, ad)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1343,15 +1437,14 @@ func TestNewApp_postgresStore(t *testing.T) {
 }
 
 func TestNewApp_dbConnectError(t *testing.T) {
-	oldConnect := dbConnect
-	dbConnect = func(string) (*sql.DB, error) { return nil, os.ErrInvalid }
-	defer func() { dbConnect = oldConnect }()
+	ad := defaultAppDeps()
+	ad.dbConnect = func(string) (*sql.DB, error) { return nil, os.ErrInvalid }
 
 	if _, err := newApp(Config{
 		ServerAddress: "localhost:8085",
 		BaseURL:       "localhost:8085",
 		DatabaseDsn:   "postgres://fail",
-	}); err == nil {
+	}, ad); err == nil {
 		t.Fatal("expected db connect error")
 	}
 }
@@ -1363,26 +1456,23 @@ func TestNewApp_migrationError(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	oldConnect := dbConnect
-	oldMigrate := runMigrate
-	dbConnect = func(string) (*sql.DB, error) { return db, nil }
-	runMigrate = func(string, string) error { return os.ErrInvalid }
-	defer func() {
-		dbConnect = oldConnect
-		runMigrate = oldMigrate
-	}()
+	ad := appDeps{
+		dbConnect:  func(string) (*sql.DB, error) { return db, nil },
+		runMigrate: func(string, string) error { return os.ErrInvalid },
+		loggerNew:  logger.New,
+	}
 
 	if _, err := newApp(Config{
 		ServerAddress: "localhost:8086",
 		BaseURL:       "localhost:8086",
 		DatabaseDsn:   "postgres://mock",
-	}); err == nil {
+	}, ad); err == nil {
 		t.Fatal("expected migration error")
 	}
 }
 
 func TestRunMigrations_invalidPath(t *testing.T) {
-	if err := runMigrations("/nonexistent-migrations-dir-xyz", "postgres://localhost/db"); err == nil {
+	if err := runMigrations("/nonexistent-migrations-dir-xyz", "postgres://localhost/db", defaultMigrateDeps()); err == nil {
 		t.Fatal("expected migration error")
 	}
 }
@@ -1393,7 +1483,7 @@ func TestRunMigrations_moduleMigrationsDir(t *testing.T) {
 		t.Skip("migrations directory not found from cmd/shortener")
 	}
 	// migrate.New должен открыть file://; Up упадёт без живой БД — покрываем ветку успешного New.
-	if err := runMigrations(migrations, "postgres://127.0.0.1:1/nodb?connect_timeout=1"); err == nil {
+	if err := runMigrations(migrations, "postgres://127.0.0.1:1/nodb?connect_timeout=1", defaultMigrateDeps()); err == nil {
 		t.Fatal("expected migration up error without database")
 	}
 }
@@ -1412,7 +1502,7 @@ func TestNewApp_auditObservers(t *testing.T) {
 		AuditFile:     auditPath,
 		AuditURL:      srv.URL,
 		SecretKey:     "",
-	})
+	}, defaultAppDeps())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1499,33 +1589,44 @@ func TestRun_shutdownOK(t *testing.T) {
 	d.logSync = func(*zap.Logger) error { return nil }
 
 	ctx, cancel := context.WithCancel(context.Background())
+
+	errCh := make(chan error, 1)
 	go func() {
-		time.Sleep(50 * time.Millisecond)
-		cancel()
+		errCh <- run(ctx, nil, d, getConfig, defaultAppDeps())
 	}()
 
-	if err := run(ctx, nil, d); err != nil {
+	if err := waitUntilListen(ln.Addr().String(), 5*time.Second); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	cancel()
+
+	if err := <-errCh; err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestRun_getConfigError(t *testing.T) {
-	old := appGetConfig
-	appGetConfig = func(Config) (Config, error) {
+	getConfigFn := func(Config) (Config, error) {
 		return Config{}, errors.New("config error")
 	}
-	t.Cleanup(func() { appGetConfig = old })
 
-	if err := runWithDeps(nil, defaultRunDeps()); err == nil {
+	if err := runWithDepsAndConfig(nil, defaultRunDeps(), getConfigFn); err == nil {
 		t.Fatal("expected config error")
 	}
+}
+
+func runWithDepsAndConfig(args []string, d runDeps, getConfigFn func(Config) (Config, error)) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return run(ctx, args, d, getConfigFn, defaultAppDeps())
 }
 
 func TestRun_listenError(t *testing.T) {
 	want := errors.New("listen failed")
 	d := defaultRunDeps()
 	d.serve = func(*http.Server) error { return want }
-	err := run(context.Background(), nil, d)
+	err := run(context.Background(), nil, d, getConfig, defaultAppDeps())
 	if !errors.Is(err, want) {
 		t.Fatalf("run() err = %v, want %v", err, want)
 	}
@@ -1582,17 +1683,86 @@ func TestRun_enableHTTPSFromEnv(t *testing.T) {
 	}
 }
 
+func TestRun_tlsCertPathsFromFlags(t *testing.T) {
+	var gotCert, gotKey string
+	d := defaultRunDeps()
+	d.serve = func(*http.Server) error {
+		t.Fatal("HTTP serve must not be called when HTTPS is enabled")
+		return nil
+	}
+	d.serveTLS = func(_ *http.Server, certFile, keyFile string) error {
+		gotCert = certFile
+		gotKey = keyFile
+		return nil
+	}
+
+	err := runUntilCancel([]string{"-s", "--tls-cert", "/custom/cert.pem", "--tls-key", "/custom/key.pem"}, d)
+	if err != nil {
+		t.Fatalf("run() err = %v", err)
+	}
+	if gotCert != "/custom/cert.pem" {
+		t.Errorf("cert file = %q; want /custom/cert.pem", gotCert)
+	}
+	if gotKey != "/custom/key.pem" {
+		t.Errorf("key file = %q; want /custom/key.pem", gotKey)
+	}
+}
+
+func TestRun_tlsCertPathsFromEnv(t *testing.T) {
+	oldHTTPS, httpsOk := os.LookupEnv("ENABLE_HTTPS")
+	oldCert, certOk := os.LookupEnv("TLS_CERT")
+	oldKey, keyOk := os.LookupEnv("TLS_KEY")
+	os.Setenv("ENABLE_HTTPS", "true")
+	os.Setenv("TLS_CERT", "/env/cert.pem")
+	os.Setenv("TLS_KEY", "/env/key.pem")
+	t.Cleanup(func() {
+		if httpsOk {
+			os.Setenv("ENABLE_HTTPS", oldHTTPS)
+		} else {
+			os.Unsetenv("ENABLE_HTTPS")
+		}
+		if certOk {
+			os.Setenv("TLS_CERT", oldCert)
+		} else {
+			os.Unsetenv("TLS_CERT")
+		}
+		if keyOk {
+			os.Setenv("TLS_KEY", oldKey)
+		} else {
+			os.Unsetenv("TLS_KEY")
+		}
+	})
+
+	var gotCert, gotKey string
+	d := defaultRunDeps()
+	d.serveTLS = func(_ *http.Server, certFile, keyFile string) error {
+		gotCert = certFile
+		gotKey = keyFile
+		return nil
+	}
+
+	err := runUntilCancel(nil, d)
+	if err != nil {
+		t.Fatalf("run() err = %v", err)
+	}
+	if gotCert != "/env/cert.pem" {
+		t.Errorf("cert file = %q; want /env/cert.pem", gotCert)
+	}
+	if gotKey != "/env/key.pem" {
+		t.Errorf("key file = %q; want /env/key.pem", gotKey)
+	}
+}
+
 func TestNewApp_loggerError(t *testing.T) {
-	old := appLoggerNew
-	appLoggerNew = func(string) (*zap.Logger, error) {
+	ad := defaultAppDeps()
+	ad.loggerNew = func(string) (*zap.Logger, error) {
 		return nil, errors.New("logger init failed")
 	}
-	t.Cleanup(func() { appLoggerNew = old })
 
 	if _, err := newApp(Config{
 		ServerAddress: "localhost:8090",
 		BaseURL:       "localhost:8090",
-	}); err == nil {
+	}, ad); err == nil {
 		t.Fatal("expected logger error")
 	}
 }
@@ -1602,7 +1772,7 @@ func TestNewApp_listUserURLs(t *testing.T) {
 		ServerAddress: "localhost:8091",
 		BaseURL:       "localhost:8091",
 		SecretKey:     "list-user-urls-secret",
-	})
+	}, defaultAppDeps())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1646,24 +1816,21 @@ func TestNewApp_postgresDefaultMigrationPath(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	var gotMigrationPath string
-	oldConnect := dbConnect
-	oldMigrate := runMigrate
-	dbConnect = func(string) (*sql.DB, error) { return db, nil }
-	runMigrate = func(path, dsn string) error {
-		gotMigrationPath = path
-		return nil
+	ad := appDeps{
+		dbConnect: func(string) (*sql.DB, error) { return db, nil },
+		runMigrate: func(path, dsn string) error {
+			gotMigrationPath = path
+			return nil
+		},
+		loggerNew: logger.New,
 	}
-	t.Cleanup(func() {
-		dbConnect = oldConnect
-		runMigrate = oldMigrate
-	})
 
 	if _, err := newApp(Config{
 		ServerAddress: "localhost:8092",
 		BaseURL:       "localhost:8092",
 		DatabaseDsn:   "postgres://mock",
 		MigrationPath: "",
-	}); err != nil {
+	}, ad); err != nil {
 		t.Fatal(err)
 	}
 	if gotMigrationPath != "migrations" {
@@ -1672,25 +1839,21 @@ func TestNewApp_postgresDefaultMigrationPath(t *testing.T) {
 }
 
 func TestRunMigrations_success(t *testing.T) {
-	oldNew, oldUp, oldClose := migrateNew, migrateUp, migrateClose
 	m := &migrate.Migrate{}
 	var upCalled bool
-	migrateNew = func(string, string) (*migrate.Migrate, error) { return m, nil }
-	migrateUp = func(got *migrate.Migrate) error {
-		upCalled = true
-		if got != m {
-			t.Errorf("migrateUp called with %p, want %p", got, m)
-		}
-		return migrate.ErrNoChange
+	md := migrateDeps{
+		newFunc: func(string, string) (*migrate.Migrate, error) { return m, nil },
+		up: func(got *migrate.Migrate) error {
+			upCalled = true
+			if got != m {
+				t.Errorf("migrateUp called with %p, want %p", got, m)
+			}
+			return migrate.ErrNoChange
+		},
+		close: func(*migrate.Migrate) {},
 	}
-	migrateClose = func(*migrate.Migrate) {}
-	t.Cleanup(func() {
-		migrateNew = oldNew
-		migrateUp = oldUp
-		migrateClose = oldClose
-	})
 
-	if err := runMigrations("migrations", "postgres://unused"); err != nil {
+	if err := runMigrations("migrations", "postgres://unused", md); err != nil {
 		t.Fatalf("runMigrations() err = %v", err)
 	}
 	if !upCalled {
@@ -1713,24 +1876,20 @@ func TestRunMigrations_fallbackFromCmdDir(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(wd) })
 
-	err = runMigrations("__invalid__", "postgres://127.0.0.1:1/nodb?connect_timeout=1")
+	err = runMigrations("__invalid__", "postgres://127.0.0.1:1/nodb?connect_timeout=1", defaultMigrateDeps())
 	if err == nil {
 		t.Fatal("expected migration up error without database")
 	}
 }
 
 func TestRunMigrations_upReturnsError(t *testing.T) {
-	oldNew, oldUp, oldClose := migrateNew, migrateUp, migrateClose
-	migrateNew = func(string, string) (*migrate.Migrate, error) { return &migrate.Migrate{}, nil }
-	migrateUp = func(*migrate.Migrate) error { return fmt.Errorf("migration up failed") }
-	migrateClose = func(*migrate.Migrate) {}
-	t.Cleanup(func() {
-		migrateNew = oldNew
-		migrateUp = oldUp
-		migrateClose = oldClose
-	})
+	md := migrateDeps{
+		newFunc: func(string, string) (*migrate.Migrate, error) { return &migrate.Migrate{}, nil },
+		up:      func(*migrate.Migrate) error { return fmt.Errorf("migration up failed") },
+		close:   func(*migrate.Migrate) {},
+	}
 
-	if err := runMigrations("migrations", "postgres://unused"); err == nil {
+	if err := runMigrations("migrations", "postgres://unused", md); err == nil {
 		t.Fatal("expected migration up error")
 	}
 }

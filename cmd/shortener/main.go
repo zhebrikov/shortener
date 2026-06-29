@@ -57,6 +57,8 @@ type Config struct {
 	AuditFile     string
 	AuditURL      string
 	EnableHTTPS   bool
+	TLSCertFile   string
+	TLSKeyFile    string
 }
 
 func defaultConfig() Config {
@@ -64,11 +66,13 @@ func defaultConfig() Config {
 		ServerAddress: defaultServerAddress,
 		BaseURL:       defaultBaseURL,
 		MigrationPath: defaultMigrationPath,
+		TLSCertFile:   defaultTLSCertFile,
+		TLSKeyFile:    defaultTLSKeyFile,
 	}
 }
 
 func configPathFromEnvOrFlag(flagPath string) string {
-	if v := os.Getenv(envConfigPath); v != "" {
+	if v, ok := os.LookupEnv(envConfigPath); ok {
 		return v
 	}
 	return flagPath
@@ -133,6 +137,12 @@ func applyVisitedFlags(cfg Config, visited map[string]bool, flags Config) Config
 	if visited["s"] {
 		cfg.EnableHTTPS = flags.EnableHTTPS
 	}
+	if visited["tls-cert"] {
+		cfg.TLSCertFile = flags.TLSCertFile
+	}
+	if visited["tls-key"] {
+		cfg.TLSKeyFile = flags.TLSKeyFile
+	}
 	return cfg
 }
 
@@ -178,6 +188,14 @@ func getConfig(defaults Config) (Config, error) {
 		}
 		enableHTTPS = parsed
 	}
+	tlsCertFile, ok := os.LookupEnv("TLS_CERT")
+	if !ok || tlsCertFile == "" {
+		tlsCertFile = defaults.TLSCertFile
+	}
+	tlsKeyFile, ok := os.LookupEnv("TLS_KEY")
+	if !ok || tlsKeyFile == "" {
+		tlsKeyFile = defaults.TLSKeyFile
+	}
 	return Config{
 		ServerAddress: serverAddress,
 		BaseURL:       baseURL,
@@ -188,6 +206,8 @@ func getConfig(defaults Config) (Config, error) {
 		AuditFile:     auditFile,
 		AuditURL:      auditURL,
 		EnableHTTPS:   enableHTTPS,
+		TLSCertFile:   tlsCertFile,
+		TLSKeyFile:    tlsKeyFile,
 	}, nil
 }
 
@@ -210,7 +230,25 @@ type app struct {
 	DB      *sql.DB
 }
 
-func newApp(cfg Config) (*app, error) {
+// appDeps группирует зависимости для [newApp] (подменяются в тестах).
+type appDeps struct {
+	dbConnect  func(dsn string) (*sql.DB, error)
+	runMigrate func(migrationsPath, dsn string) error
+	loggerNew  func(level string) (*zap.Logger, error)
+}
+
+func defaultAppDeps() appDeps {
+	md := defaultMigrateDeps()
+	return appDeps{
+		dbConnect: postgresql.Connection,
+		runMigrate: func(migrationsPath, dsn string) error {
+			return runMigrations(migrationsPath, dsn, md)
+		},
+		loggerNew: logger.New,
+	}
+}
+
+func newApp(cfg Config, ad appDeps) (*app, error) {
 	secretKey := cfg.SecretKey
 	if secretKey == "" {
 		secretKey = "dev-insecure-secret-change-me"
@@ -220,7 +258,7 @@ func newApp(cfg Config) (*app, error) {
 	var db *sql.DB
 	if cfg.DatabaseDsn != "" {
 		var errConn error
-		db, errConn = dbConnect(cfg.DatabaseDsn)
+		db, errConn = ad.dbConnect(cfg.DatabaseDsn)
 		if errConn != nil {
 			return nil, errConn
 		}
@@ -228,7 +266,7 @@ func newApp(cfg Config) (*app, error) {
 		if migrationsPath == "" {
 			migrationsPath = "migrations"
 		}
-		if errMig := runMigrate(migrationsPath, cfg.DatabaseDsn); errMig != nil {
+		if errMig := ad.runMigrate(migrationsPath, cfg.DatabaseDsn); errMig != nil {
 			return nil, errMig
 		}
 		store = storage.NewPostgresStorage(db)
@@ -243,7 +281,7 @@ func newApp(cfg Config) (*app, error) {
 		return nil, err
 	}
 
-	zapLog, err := appLoggerNew("info")
+	zapLog, err := ad.loggerNew("info")
 	if err != nil {
 		return nil, err
 	}
@@ -311,7 +349,7 @@ func defaultRunDeps() runDeps {
 	}
 }
 
-func run(ctx context.Context, args []string, d runDeps) error {
+func run(ctx context.Context, args []string, d runDeps, getConfigFn func(Config) (Config, error), ad appDeps) error {
 	fs := flag.NewFlagSet("shortener", flag.ContinueOnError)
 	var configPathFlag string
 	fs.StringVar(&configPathFlag, "c", "", "path to JSON config file (CONFIG)")
@@ -325,6 +363,8 @@ func run(ctx context.Context, args []string, d runDeps) error {
 	auditFileFlag := fs.String("audit-file", "", "append-only audit log file path (or AUDIT_FILE env; empty = disabled)")
 	auditURLFlag := fs.String("audit-url", "", "remote audit sink POST URL (or AUDIT_URL env; empty = disabled)")
 	enableHTTPSFlag := fs.Bool("s", false, "enable HTTPS (or ENABLE_HTTPS env)")
+	tlsCertFlag := fs.String("tls-cert", defaultTLSCertFile, "path to TLS certificate file (or TLS_CERT env)")
+	tlsKeyFlag := fs.String("tls-key", defaultTLSKeyFile, "path to TLS private key file (or TLS_KEY env)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -355,15 +395,17 @@ func run(ctx context.Context, args []string, d runDeps) error {
 		AuditFile:     *auditFileFlag,
 		AuditURL:      *auditURLFlag,
 		EnableHTTPS:   *enableHTTPSFlag,
+		TLSCertFile:   *tlsCertFlag,
+		TLSKeyFile:    *tlsKeyFlag,
 	}
 	cfg = applyVisitedFlags(cfg, visited, flagCfg)
 
-	cfg, err := appGetConfig(cfg)
+	cfg, err := getConfigFn(cfg)
 	if err != nil {
 		return err
 	}
 
-	application, err := newApp(cfg)
+	application, err := newApp(cfg, ad)
 	if err != nil {
 		return err
 	}
@@ -384,7 +426,7 @@ func run(ctx context.Context, args []string, d runDeps) error {
 	go func() {
 		var errServe error
 		if cfg.EnableHTTPS {
-			errServe = d.serveTLS(srv, defaultTLSCertFile, defaultTLSKeyFile)
+			errServe = d.serveTLS(srv, cfg.TLSCertFile, cfg.TLSKeyFile)
 		} else {
 			errServe = d.serve(srv)
 		}
@@ -406,7 +448,7 @@ func run(ctx context.Context, args []string, d runDeps) error {
 		sd = func(ctx context.Context, srv *http.Server) error { return srv.Shutdown(ctx) }
 	}
 	if err := sd(shutdownCtx, srv); err != nil {
-		log.Printf("server shutdown: %v", err)
+		application.Log.Error("server shutdown", zap.Error(err))
 	}
 	application.Deleter.Shutdown()
 	if syncFn := d.logSync; syncFn != nil {
@@ -419,42 +461,62 @@ func defaultMigrateUp(m *migrate.Migrate) error {
 	return m.Up()
 }
 
-// osExit, dbConnect и др. подменяются в тестах.
-var (
-	osExit         = os.Exit
-	runDepsFactory = defaultRunDeps
-	notifyContext  = func() (context.Context, context.CancelFunc) {
-		return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
-	}
-	dbConnect      = postgresql.Connection
-	runMigrate   = runMigrations
-	appGetConfig = getConfig
-	appLoggerNew = logger.New
-	migrateNew   = migrate.New
-	migrateUp    = defaultMigrateUp
-	migrateClose = func(m *migrate.Migrate) { _, _ = m.Close() }
-)
+// migrateDeps группирует зависимости для [runMigrations] (подменяются в тестах).
+type migrateDeps struct {
+	newFunc func(sourceURL, databaseURL string) (*migrate.Migrate, error)
+	up      func(m *migrate.Migrate) error
+	close   func(m *migrate.Migrate)
+}
 
-func runMigrations(migrationsPath, dsn string) error {
+func defaultMigrateDeps() migrateDeps {
+	return migrateDeps{
+		newFunc: migrate.New,
+		up:      defaultMigrateUp,
+		close:   func(m *migrate.Migrate) { _, _ = m.Close() },
+	}
+}
+
+func runMigrations(migrationsPath, dsn string, md migrateDeps) error {
 	if abs, err := filepath.Abs(migrationsPath); err == nil {
 		migrationsPath = abs
 	}
-	m, err := migrateNew("file://"+migrationsPath, dsn)
+	m, err := md.newFunc("file://"+migrationsPath, dsn)
 	if err != nil {
 		migrationsPath = "../migrations"
 		if abs, err := filepath.Abs(migrationsPath); err == nil {
 			migrationsPath = abs
 		}
-		m, err = migrateNew("file://"+migrationsPath, dsn)
+		m, err = md.newFunc("file://"+migrationsPath, dsn)
 		if err != nil {
 			return err
 		}
 	}
-	defer migrateClose(m)
-	if errUp := migrateUp(m); errUp != nil && errUp != migrate.ErrNoChange {
+	defer md.close(m)
+	if errUp := md.up(m); errUp != nil && errUp != migrate.ErrNoChange {
 		return errUp
 	}
 	return nil
+}
+
+// mainDeps группирует зависимости для [runMain] (подменяются в тестах).
+type mainDeps struct {
+	exit          func(int)
+	notifyContext func() (context.Context, context.CancelFunc)
+	runDeps       runDeps
+	getConfig     func(Config) (Config, error)
+	appDeps       appDeps
+}
+
+func defaultMainDeps() mainDeps {
+	return mainDeps{
+		exit: os.Exit,
+		notifyContext: func() (context.Context, context.CancelFunc) {
+			return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+		},
+		runDeps:   defaultRunDeps(),
+		getConfig: getConfig,
+		appDeps:   defaultAppDeps(),
+	}
 }
 
 func buildInfoOrNA(s string) string {
@@ -470,15 +532,19 @@ func printBuildInfo() {
 	fmt.Println("Build commit:", buildInfoOrNA(buildCommit))
 }
 
-func main() {
+func runMain(md mainDeps) {
 	printBuildInfo()
-	ctx, stop := notifyContext()
+	ctx, stop := md.notifyContext()
 	defer stop()
-	osExit(exitCode(ctx, os.Args[1:]))
+	md.exit(exitCode(ctx, os.Args[1:], md.runDeps, md.getConfig, md.appDeps))
 }
 
-func exitCode(ctx context.Context, args []string) int {
-	if err := run(ctx, args, runDepsFactory()); err != nil {
+func main() {
+	runMain(defaultMainDeps())
+}
+
+func exitCode(ctx context.Context, args []string, d runDeps, getConfigFn func(Config) (Config, error), ad appDeps) int {
+	if err := run(ctx, args, d, getConfigFn, ad); err != nil {
 		log.Print(err)
 		return 1
 	}

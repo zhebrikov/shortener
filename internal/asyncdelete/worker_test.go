@@ -10,13 +10,12 @@ import (
 )
 
 func TestSubmit_noop(t *testing.T) {
-	var w *Worker
-	w.Submit("u1", []string{"a"})
 	store := storage.NewMemoryStorage()
-	w = NewWorker(store)
+	w := NewWorker(store)
 	w.Submit("", []string{"a"})
 	w.Submit("u1", nil)
 	w.Submit("u1", []string{"", "  "})
+	w.Shutdown()
 }
 
 func TestWorker_softDelete(t *testing.T) {
