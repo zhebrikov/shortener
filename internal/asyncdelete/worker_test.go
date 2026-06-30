@@ -10,13 +10,12 @@ import (
 )
 
 func TestSubmit_noop(t *testing.T) {
-	var w *Worker
-	w.Submit("u1", []string{"a"})
 	store := storage.NewMemoryStorage()
-	w = NewWorker(store)
+	w := NewWorker(store)
 	w.Submit("", []string{"a"})
 	w.Submit("u1", nil)
 	w.Submit("u1", []string{"", "  "})
+	w.Shutdown()
 }
 
 func TestWorker_softDelete(t *testing.T) {
@@ -82,6 +81,24 @@ func TestWorker_largeBatchFlush(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("expected all user links to be soft-deleted")
+}
+
+func TestWorker_shutdownFlushesPending(t *testing.T) {
+	store := storage.NewMemoryStorage()
+	_ = store.WriteStorage(storage.Link{
+		UUID: 1, ShortURL: "http://localhost/c1", OriginalURL: "https://a.com", UserID: "u1",
+	})
+	w := NewWorker(store)
+	w.Submit("u1", []string{"c1"})
+	w.Shutdown()
+
+	link, err := store.GetLinkByShortCode("c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !link.IsDeleted {
+		t.Fatal("expected link to be soft-deleted after Shutdown")
+	}
 }
 
 func TestWorker_flushError(t *testing.T) {
