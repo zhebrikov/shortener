@@ -38,6 +38,10 @@ type LinkStore interface {
 	SoftDeleteURLsByUser(userID string, shortCodes []string) error
 	// GetLinkByShortCode возвращает запись по коду из пути (суффикс short_url).
 	GetLinkByShortCode(shortCode string) (Link, error)
+	// CountURLs возвращает общее количество сокращённых URL в хранилище.
+	CountURLs() (int, error)
+	// CountUsers возвращает количество уникальных пользователей в хранилище.
+	CountUsers() (int, error)
 }
 
 // Storage хранит ссылки в JSON-файле на диске.
@@ -235,4 +239,28 @@ func (s *Storage) GetLinkByShortCode(shortCode string) (Link, error) {
 		}
 	}
 	return Link{}, ErrLinkNotFound
+}
+
+// CountURLs возвращает общее количество ссылок в файле.
+func (s *Storage) CountURLs() (int, error) {
+	links, err := s.ReadStorage()
+	if err != nil {
+		return 0, err
+	}
+	return len(links), nil
+}
+
+// CountUsers возвращает количество уникальных пользователей.
+func (s *Storage) CountUsers() (int, error) {
+	links, err := s.ReadStorage()
+	if err != nil {
+		return 0, err
+	}
+	users := make(map[string]struct{})
+	for _, l := range links {
+		if l.UserID != "" {
+			users[l.UserID] = struct{}{}
+		}
+	}
+	return len(users), nil
 }

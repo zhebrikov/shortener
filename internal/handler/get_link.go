@@ -4,26 +4,18 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/zhebrikov/shortener/internal/audit"
 	"github.com/zhebrikov/shortener/internal/service"
-	"github.com/zhebrikov/shortener/internal/storage"
 )
 
 // GetLink выполняет редирект на оригинальный URL по shortCode из пути запроса.
-func GetLink(
-	w http.ResponseWriter,
-	r *http.Request,
-	shortener *service.Shortener,
-	store storage.LinkStore,
-	auditPub *audit.Publisher,
-) {
+func GetLink(w http.ResponseWriter, r *http.Request, h *ShortenerHandler) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	shortCode := r.URL.Path[1:]
 
-	originalURL, err := shortener.GetLink(shortCode, store)
+	originalURL, err := h.app.ExpandURL(r.Context(), shortCode)
 
 	if errors.Is(err, service.ErrLinkDeleted) {
 		w.WriteHeader(http.StatusGone)
@@ -40,7 +32,6 @@ func GetLink(
 		return
 	}
 
-	publishAudit(auditPub, r, audit.ActionFollow, originalURL)
 	w.Header().Set("Location", originalURL)
 	w.WriteHeader(http.StatusTemporaryRedirect)
 }

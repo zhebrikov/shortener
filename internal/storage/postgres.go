@@ -196,3 +196,17 @@ func (p *PostgresStorage) GetLinkByShortCode(shortCode string) (Link, error) {
 	}
 	return Link{ShortURL: short, OriginalURL: url, UserID: uid, IsDeleted: isDeleted}, nil
 }
+
+// CountURLs возвращает общее количество ссылок в таблице links.
+func (p *PostgresStorage) CountURLs() (int, error) {
+	var count int
+	err := p.db.QueryRow("SELECT COUNT(*) FROM links").Scan(&count)
+	return count, err
+}
+
+// CountUsers возвращает количество уникальных пользователей.
+func (p *PostgresStorage) CountUsers() (int, error) {
+	var count int
+	err := p.db.QueryRow("SELECT COUNT(DISTINCT user_id) FROM links WHERE user_id IS NOT NULL").Scan(&count)
+	return count, err
+}

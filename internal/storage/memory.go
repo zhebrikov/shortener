@@ -135,3 +135,23 @@ func (m *MemoryStorage) GetLinkByShortCode(shortCode string) (Link, error) {
 	}
 	return Link{}, ErrLinkNotFound
 }
+
+// CountURLs возвращает общее количество ссылок в памяти.
+func (m *MemoryStorage) CountURLs() (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.links), nil
+}
+
+// CountUsers возвращает количество уникальных пользователей.
+func (m *MemoryStorage) CountUsers() (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	users := make(map[string]struct{})
+	for _, l := range m.links {
+		if l.UserID != "" {
+			users[l.UserID] = struct{}{}
+		}
+	}
+	return len(users), nil
+}

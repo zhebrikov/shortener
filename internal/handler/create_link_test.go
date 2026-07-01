@@ -61,7 +61,8 @@ func TestCreateLink(t *testing.T) {
 			}
 			rr := httptest.NewRecorder()
 
-			CreateLink(rr, req, shortener, store, nil)
+			h := newTestHandler(shortener, store, nil)
+			CreateLink(rr, req, h)
 
 			if rr.Code != tt.wantStatus {
 				t.Errorf("CreateLink: статус = %d, ожидалось %d", rr.Code, tt.wantStatus)
@@ -87,7 +88,7 @@ func TestCreateLink_duplicateConflict(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("https://example.com/dup"))
 	req.Header.Set("Content-Type", "text/plain")
 	rr := httptest.NewRecorder()
-	CreateLink(rr, req, shortener, store, nil)
+	CreateLink(rr, req, newTestHandler(shortener, store, nil))
 	if rr.Code != http.StatusConflict {
 		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
 	}
@@ -101,7 +102,7 @@ func TestCreateLink_storeErrors(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("https://example.com/y"))
 		req.Header.Set("Content-Type", "text/plain")
 		rr := httptest.NewRecorder()
-		CreateLink(rr, req, shortener, store, nil)
+		CreateLink(rr, req, newTestHandler(shortener, store, nil))
 		if rr.Code != http.StatusInternalServerError {
 			t.Fatalf("status = %d", rr.Code)
 		}
@@ -113,7 +114,7 @@ func TestCreateLink_storeErrors(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("https://example.com/dup2"))
 		req.Header.Set("Content-Type", "text/plain")
 		rr := httptest.NewRecorder()
-		CreateLink(rr, req, shortener, store, nil)
+		CreateLink(rr, req, newTestHandler(shortener, store, nil))
 		if rr.Code != http.StatusInternalServerError {
 			t.Fatalf("status = %d", rr.Code)
 		}
@@ -125,7 +126,7 @@ func TestCreateLink_storeErrors(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("https://example.com/z"))
 		req.Header.Set("Content-Type", "text/plain")
 		rr := httptest.NewRecorder()
-		CreateLink(rr, req, badShortener, store, nil)
+		CreateLink(rr, req, newTestHandler(badShortener, store, nil))
 		if rr.Code != http.StatusInternalServerError {
 			t.Fatalf("status = %d", rr.Code)
 		}

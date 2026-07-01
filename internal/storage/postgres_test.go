@@ -836,3 +836,45 @@ func TestPostgresStorage_SoftDeleteURLsByUser_error(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPostgresStorage_CountURLsAndUsers(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM links").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(5))
+	mock.ExpectQuery("SELECT COUNT\\(DISTINCT user_id\\) FROM links WHERE user_id IS NOT NULL").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
+
+	urls, err := ps.CountURLs()
+	if err != nil || urls != 5 {
+		t.Fatalf("CountURLs() = %d, %v; want 5, nil", urls, err)
+	}
+	users, err := ps.CountUsers()
+	if err != nil || users != 3 {
+		t.Fatalf("CountUsers() = %d, %v; want 3, nil", users, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStorage_CountURLs_error(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps := NewPostgresStorage(db)
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM links").
+		WillReturnError(sql.ErrConnDone)
+
+	if _, err := ps.CountURLs(); err != sql.ErrConnDone {
+		t.Fatalf("CountURLs() err = %v", err)
+	}
+}

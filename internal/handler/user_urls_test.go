@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/zhebrikov/shortener/internal/auth"
+	"github.com/zhebrikov/shortener/internal/service"
 )
 
 func TestListUserURLs_Unauthorized_NoUserInContext(t *testing.T) {
@@ -16,7 +17,8 @@ func TestListUserURLs_Unauthorized_NoUserInContext(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/user/urls", nil)
 	rr := httptest.NewRecorder()
 
-	ListUserURLs(rr, req, store)
+	h := newTestHandler(service.NewShortener("localhost:8080"), store, nil)
+	ListUserURLs(rr, req, h)
 
 	if rr.Code != http.StatusUnauthorized {
 		t.Errorf("ListUserURLs: статус = %d, ожидалось %d", rr.Code, http.StatusUnauthorized)
@@ -29,7 +31,8 @@ func TestListUserURLs_Unauthorized_EmptyCookie(t *testing.T) {
 	req = req.WithContext(auth.WithEmptyAuthCookie(context.Background()))
 	rr := httptest.NewRecorder()
 
-	ListUserURLs(rr, req, store)
+	h := newTestHandler(service.NewShortener("localhost:8080"), store, nil)
+	ListUserURLs(rr, req, h)
 
 	if rr.Code != http.StatusUnauthorized {
 		t.Errorf("ListUserURLs: статус = %d, ожидалось %d", rr.Code, http.StatusUnauthorized)
@@ -42,7 +45,8 @@ func TestListUserURLs_NoContent_EmptyList(t *testing.T) {
 	req = req.WithContext(auth.WithUserID(context.Background(), "user-1"))
 	rr := httptest.NewRecorder()
 
-	ListUserURLs(rr, req, store)
+	h := newTestHandler(service.NewShortener("localhost:8080"), store, nil)
+	ListUserURLs(rr, req, h)
 
 	if rr.Code != http.StatusNoContent {
 		t.Errorf("ListUserURLs: статус = %d, ожидалось %d", rr.Code, http.StatusNoContent)
@@ -57,7 +61,8 @@ func TestListUserURLs_OK_ReturnsUserLinks(t *testing.T) {
 	req = req.WithContext(auth.WithUserID(context.Background(), uid))
 	rr := httptest.NewRecorder()
 
-	ListUserURLs(rr, req, store)
+	h := newTestHandler(service.NewShortener("localhost:8080"), store, nil)
+	ListUserURLs(rr, req, h)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("ListUserURLs: статус = %d, ожидалось %d", rr.Code, http.StatusOK)
@@ -95,7 +100,8 @@ func TestListUserURLs_encodeError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/user/urls", nil)
 	req = req.WithContext(auth.WithUserID(context.Background(), uid))
 	rr := httptest.NewRecorder()
-	ListUserURLs(&failEncodeResponseWriter{ResponseWriter: rr}, req, store)
+	h := newTestHandler(service.NewShortener("localhost:8080"), store, nil)
+	ListUserURLs(&failEncodeResponseWriter{ResponseWriter: rr}, req, h)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d", rr.Code)
 	}
@@ -105,7 +111,7 @@ func TestListUserURLs_storeError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/user/urls", nil)
 	req = req.WithContext(auth.WithUserID(context.Background(), "user-1"))
 	rr := httptest.NewRecorder()
-	ListUserURLs(rr, req, errReadStore{err: errors.New("store down")})
+	ListUserURLs(rr, req, newTestHandler(service.NewShortener("localhost:8080"), errReadStore{err: errors.New("store down")}, nil))
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d", rr.Code)
 	}

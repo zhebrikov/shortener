@@ -449,3 +449,30 @@ func TestStorage_ReadStorage_createFileError(t *testing.T) {
 		t.Fatal("expected error when cannot create storage file")
 	}
 }
+
+func TestStorage_CountURLsAndUsers(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStorage(filepath.Join(dir, "counts.json"))
+	_ = s.WriteStorage(Link{UUID: 1, ShortURL: "a", OriginalURL: "https://a.com", UserID: "u1"})
+	_ = s.WriteStorage(Link{UUID: 2, ShortURL: "b", OriginalURL: "https://b.com", UserID: "u2"})
+	_ = s.WriteStorage(Link{UUID: 3, ShortURL: "c", OriginalURL: "https://c.com"})
+
+	urls, err := s.CountURLs()
+	if err != nil || urls != 3 {
+		t.Fatalf("CountURLs() = %d, %v; want 3, nil", urls, err)
+	}
+	users, err := s.CountUsers()
+	if err != nil || users != 2 {
+		t.Fatalf("CountUsers() = %d, %v; want 2, nil", users, err)
+	}
+}
+
+func TestStorage_CountURLs_readError(t *testing.T) {
+	s := corruptStorage(t)
+	if _, err := s.CountURLs(); err == nil {
+		t.Fatal("expected read error")
+	}
+	if _, err := s.CountUsers(); err == nil {
+		t.Fatal("expected read error")
+	}
+}

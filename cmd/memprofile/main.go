@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 
+	"github.com/zhebrikov/shortener/internal/asyncdelete"
 	"github.com/zhebrikov/shortener/internal/handler"
 	"github.com/zhebrikov/shortener/internal/service"
 	"github.com/zhebrikov/shortener/internal/storage"
@@ -78,6 +79,7 @@ func run() error {
 
 	jsonBody, _ := json.Marshal(handler.Input{URL: "https://bench.example/new"})
 	plainBody := []byte("https://bench.example/plain")
+	h := handler.NewShortenerHandler(shortener, store, asyncdelete.NewWorker(store), nil)
 
 	for i := 0; i < *ops; i++ {
 		switch i % 4 {
@@ -85,17 +87,17 @@ func run() error {
 			code := codes[i%len(codes)]
 			req := httptest.NewRequest(http.MethodGet, "/"+code, nil)
 			rr := httptest.NewRecorder()
-			handler.GetLink(rr, req, shortener, store, nil)
+			handler.GetLink(rr, req, h)
 		case 1:
 			req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(jsonBody))
 			req.Header.Set("Content-Type", "application/json")
 			rr := httptest.NewRecorder()
-			handler.CreateLinkJSON(rr, req, shortener, store, nil)
+			handler.CreateLinkJSON(rr, req, h)
 		case 2:
 			req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(plainBody))
 			req.Header.Set("Content-Type", "text/plain")
 			rr := httptest.NewRecorder()
-			handler.CreateLink(rr, req, shortener, store, nil)
+			handler.CreateLink(rr, req, h)
 		case 3:
 			_, _ = shortener.GetLink(codes[0], store)
 		}
