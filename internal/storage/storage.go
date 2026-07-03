@@ -42,6 +42,8 @@ type LinkStore interface {
 	CountURLs() (int, error)
 	// CountUsers возвращает количество уникальных пользователей в хранилище.
 	CountUsers() (int, error)
+	// Stats возвращает количество URL и пользователей по одному согласованному снимку данных.
+	Stats() (urls, users int, err error)
 }
 
 // Storage хранит ссылки в JSON-файле на диске.
@@ -263,4 +265,21 @@ func (s *Storage) CountUsers() (int, error) {
 		}
 	}
 	return len(users), nil
+}
+
+// Stats возвращает количество URL и пользователей по одному снимку файла.
+func (s *Storage) Stats() (int, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	links, err := s.readStorageLocked()
+	if err != nil {
+		return 0, 0, err
+	}
+	users := make(map[string]struct{})
+	for _, l := range links {
+		if l.UserID != "" {
+			users[l.UserID] = struct{}{}
+		}
+	}
+	return len(links), len(users), nil
 }

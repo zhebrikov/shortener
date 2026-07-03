@@ -321,6 +321,11 @@ func newApp(cfg Config, ad appDeps) (*app, error) {
 
 	h := handler.NewShortenerHandler(shortener, store, deleter, auditPub)
 
+	trustedSubnet, err := middleware.ParseTrustedSubnet(cfg.TrustedSubnet)
+	if err != nil {
+		return nil, err
+	}
+
 	r := chi.NewRouter()
 	r.Use(logger.Middleware(zapLog))
 	r.Use(middleware.Gzip)
@@ -329,7 +334,12 @@ func newApp(cfg Config, ad appDeps) (*app, error) {
 	r.Get("/{shortCode}", h.GetLink)
 	r.Post("/api/shorten", h.CreateLinkJSON)
 	r.Get("/ping", handler.HealthCheck(db))
-	r.Get("/api/internal/stats", handler.InternalStats(cfg.TrustedSubnet, store))
+	if trustedSubnet.IsConfigured() {
+		r.Route("/api/internal", func(r chi.Router) {
+			r.Use(middleware.TrustedSubnetOnly(trustedSubnet))
+			r.Get("/stats", handler.InternalStats(store))
+		})
+	}
 	r.Post("/api/shorten/batch", h.CreateLinkBatch)
 	r.Get("/api/user/urls", h.ListUserURLs)
 	r.Delete("/api/user/urls", h.DeleteUserURLs)

@@ -155,3 +155,16 @@ func (m *MemoryStorage) CountUsers() (int, error) {
 	}
 	return len(users), nil
 }
+
+// Stats возвращает количество URL и пользователей по одному снимку данных в памяти.
+func (m *MemoryStorage) Stats() (int, int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	users := make(map[string]struct{})
+	for _, l := range m.links {
+		if l.UserID != "" {
+			users[l.UserID] = struct{}{}
+		}
+	}
+	return len(m.links), len(users), nil
+}

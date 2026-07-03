@@ -41,6 +41,7 @@ func (e errReadStore) GetLinkByShortCode(string) (storage.Link, error) {
 }
 func (e errReadStore) CountURLs() (int, error)  { return 0, e.err }
 func (e errReadStore) CountUsers() (int, error) { return 0, e.err }
+func (e errReadStore) Stats() (int, int, error) { return 0, 0, e.err }
 
 type badShortenerStore struct {
 	*storage.MemoryStorage

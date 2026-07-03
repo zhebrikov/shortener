@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -25,7 +26,8 @@ func NewPostgresStorage(db *sql.DB) *PostgresStorage {
 
 // ReadStorage возвращает все строки таблицы links.
 func (p *PostgresStorage) ReadStorage() ([]Link, error) {
-	rows, err := p.db.Query("SELECT url, short_url, user_id, is_deleted FROM links ORDER BY id")
+	ctx := context.Background()
+	rows, err := p.db.QueryContext(ctx, "SELECT url, short_url, user_id, is_deleted FROM links ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -50,10 +52,11 @@ func (p *PostgresStorage) ReadStorage() ([]Link, error) {
 
 // GetByShortURL возвращает одну запись по short_url или sql.ErrNoRows, если не найдена.
 func (p *PostgresStorage) GetByShortURL(shortURL string) (*Link, error) {
+	ctx := context.Background()
 	var url, short string
 	var userID sql.NullString
 	var isDeleted bool
-	err := p.db.QueryRow("SELECT url, short_url, user_id, is_deleted FROM links WHERE short_url = $1", shortURL).Scan(&url, &short, &userID, &isDeleted)
+	err := p.db.QueryRowContext(ctx, "SELECT url, short_url, user_id, is_deleted FROM links WHERE short_url = $1", shortURL).Scan(&url, &short, &userID, &isDeleted)
 	if err != nil {
 		return nil, err
 	}
@@ -66,8 +69,9 @@ func (p *PostgresStorage) GetByShortURL(shortURL string) (*Link, error) {
 
 // GetShortURLByOriginalURL возвращает short_url по полю url.
 func (p *PostgresStorage) GetShortURLByOriginalURL(originalURL string) (string, error) {
+	ctx := context.Background()
 	var shortURL string
-	err := p.db.QueryRow("SELECT short_url FROM links WHERE url = $1", originalURL).Scan(&shortURL)
+	err := p.db.QueryRowContext(ctx, "SELECT short_url FROM links WHERE url = $1", originalURL).Scan(&shortURL)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", errors.New("url not found")
@@ -79,11 +83,13 @@ func (p *PostgresStorage) GetShortURLByOriginalURL(originalURL string) (string, 
 
 // WriteStorage вставляет одну строку; уникальное нарушение по url даёт ErrDuplicateURL.
 func (p *PostgresStorage) WriteStorage(link Link) error {
+	ctx := context.Background()
 	var userID interface{}
 	if link.UserID != "" {
 		userID = link.UserID
 	}
-	_, err := p.db.Exec(
+	_, err := p.db.ExecContext(
+		ctx,
 		"INSERT INTO links (url, short_url, user_id, is_deleted) VALUES ($1, $2, $3, $4)",
 		link.OriginalURL,
 		link.ShortURL,
@@ -104,6 +110,7 @@ func (p *PostgresStorage) WriteStorageBatch(links []Link) error {
 	if len(links) == 0 {
 		return nil
 	}
+	ctx := context.Background()
 	valueStrings := make([]string, 0, len(links))
 	valueArgs := make([]interface{}, 0, len(links)*4)
 	for i, link := range links {
@@ -116,7 +123,7 @@ func (p *PostgresStorage) WriteStorageBatch(links []Link) error {
 		valueArgs = append(valueArgs, link.OriginalURL, link.ShortURL, uid, false)
 	}
 	stmt := "INSERT INTO links (url, short_url, user_id, is_deleted) VALUES " + strings.Join(valueStrings, ",")
-	_, err := p.db.Exec(stmt, valueArgs...)
+	_, err := p.db.ExecContext(ctx, stmt, valueArgs...)
 	if err != nil {
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == pgerrcode.UniqueViolation {
 			return ErrDuplicateURL
@@ -131,7 +138,9 @@ func (p *PostgresStorage) GetLinksByUserID(userID string) ([]Link, error) {
 	if userID == "" {
 		return nil, nil
 	}
-	rows, err := p.db.Query(
+	ctx := context.Background()
+	rows, err := p.db.QueryContext(
+		ctx,
 		"SELECT url, short_url FROM links WHERE user_id = $1::uuid AND is_deleted = false ORDER BY id",
 		userID,
 	)
@@ -156,7 +165,8 @@ func (p *PostgresStorage) SoftDeleteURLsByUser(userID string, shortCodes []strin
 	if userID == "" || len(shortCodes) == 0 {
 		return nil
 	}
-	_, err := p.db.Exec(`
+	ctx := context.Background()
+	_, err := p.db.ExecContext(ctx, `
 		UPDATE links SET is_deleted = true
 		WHERE user_id = $1::uuid
 		AND is_deleted = false
@@ -176,10 +186,12 @@ func (p *PostgresStorage) GetLinkByShortCode(shortCode string) (Link, error) {
 	if shortCode == "" {
 		return Link{}, ErrLinkNotFound
 	}
+	ctx := context.Background()
 	var url, short string
 	var userID sql.NullString
 	var isDeleted bool
-	err := p.db.QueryRow(
+	err := p.db.QueryRowContext(
+		ctx,
 		`SELECT url, short_url, user_id, is_deleted FROM links
 		 WHERE short_url = $1 OR short_url LIKE '%/' || $1`,
 		shortCode,
@@ -199,14 +211,38 @@ func (p *PostgresStorage) GetLinkByShortCode(shortCode string) (Link, error) {
 
 // CountURLs возвращает общее количество ссылок в таблице links.
 func (p *PostgresStorage) CountURLs() (int, error) {
+	ctx := context.Background()
 	var count int
-	err := p.db.QueryRow("SELECT COUNT(*) FROM links").Scan(&count)
+	err := p.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM links").Scan(&count)
 	return count, err
 }
 
 // CountUsers возвращает количество уникальных пользователей.
 func (p *PostgresStorage) CountUsers() (int, error) {
+	ctx := context.Background()
 	var count int
-	err := p.db.QueryRow("SELECT COUNT(DISTINCT user_id) FROM links WHERE user_id IS NOT NULL").Scan(&count)
+	err := p.db.QueryRowContext(ctx, "SELECT COUNT(DISTINCT user_id) FROM links WHERE user_id IS NOT NULL").Scan(&count)
 	return count, err
+}
+
+// Stats возвращает количество URL и пользователей в одной read-only транзакции.
+func (p *PostgresStorage) Stats() (int, int, error) {
+	ctx := context.Background()
+	tx, err := p.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback()
+
+	var urls, users int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM links").Scan(&urls); err != nil {
+		return 0, 0, err
+	}
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(DISTINCT user_id) FROM links WHERE user_id IS NOT NULL").Scan(&users); err != nil {
+		return 0, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, 0, err
+	}
+	return urls, users, nil
 }

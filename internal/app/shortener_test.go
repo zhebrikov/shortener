@@ -66,6 +66,7 @@ func (s *stubStore) GetLinkByShortCode(shortCode string) (storage.Link, error) {
 }
 func (s *stubStore) CountURLs() (int, error)  { return len(s.links), nil }
 func (s *stubStore) CountUsers() (int, error) { return 0, nil }
+func (s *stubStore) Stats() (int, int, error) { return len(s.links), 0, nil }
 
 func TestShortenerApp_ShortenAndExpand(t *testing.T) {
 	store := &stubStore{}
@@ -186,6 +187,7 @@ func (writeErrorStore) GetLinkByShortCode(string) (storage.Link, error) {
 }
 func (writeErrorStore) CountURLs() (int, error)  { return 0, nil }
 func (writeErrorStore) CountUsers() (int, error) { return 0, nil }
+func (writeErrorStore) Stats() (int, int, error) { return 0, 0, nil }
 
 type dupLookupErrorStore struct{}
 
@@ -203,6 +205,7 @@ func (dupLookupErrorStore) GetLinkByShortCode(string) (storage.Link, error) {
 }
 func (dupLookupErrorStore) CountURLs() (int, error)  { return 0, nil }
 func (dupLookupErrorStore) CountUsers() (int, error) { return 0, nil }
+func (dupLookupErrorStore) Stats() (int, int, error) { return 0, 0, nil }
 
 func TestShortenerApp_auditPublished(t *testing.T) {
 	store := &stubStore{}

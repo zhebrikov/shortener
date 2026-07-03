@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/zhebrikov/shortener/internal/middleware"
 	"github.com/zhebrikov/shortener/internal/storage"
 )
 
@@ -13,20 +12,10 @@ type internalStatsResponse struct {
 	Users int `json:"users"`
 }
 
-// InternalStats возвращает статистику сервиса; доступ только из доверенной подсети (заголовок X-Real-IP).
-func InternalStats(trustedSubnet string, store storage.LinkStore) http.HandlerFunc {
+// InternalStats возвращает статистику сервиса.
+func InternalStats(store storage.LinkStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !middleware.IPInTrustedSubnet(trustedSubnet, r.Header.Get("X-Real-IP")) {
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
-		}
-
-		urls, err := store.CountURLs()
-		if err != nil {
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			return
-		}
-		users, err := store.CountUsers()
+		urls, users, err := store.Stats()
 		if err != nil {
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return

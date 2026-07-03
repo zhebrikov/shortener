@@ -4,6 +4,7 @@ package grpcserver
 import (
 	"context"
 	"errors"
+	"log"
 
 	"github.com/zhebrikov/shortener/internal/app"
 	"github.com/zhebrikov/shortener/internal/auth"
@@ -12,7 +13,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/proto"
 )
 
 // Server реализует ShortenerService.
@@ -52,9 +53,12 @@ func NewGRPCServer(shortenerApp *app.ShortenerApp, secretKey string) *grpc.Serve
 func (s *Server) ShortenURL(ctx context.Context, req *pb.URLShortenRequest) (*pb.URLShortenResponse, error) {
 	result, err := s.app.ShortenURL(ctx, req.GetUrl())
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		log.Printf("ShortenURL: %v", err)
+		return nil, status.Error(codes.Internal, "internal error")
 	}
-	return &pb.URLShortenResponse{Result: result.ShortURL}, nil
+	return pb.URLShortenResponse_builder{
+		Result: proto.String(result.ShortURL),
+	}.Build(), nil
 }
 
 // ExpandURL возвращает оригинальный URL по id.
@@ -67,23 +71,30 @@ func (s *Server) ExpandURL(ctx context.Context, req *pb.URLExpandRequest) (*pb.U
 		return nil, status.Error(codes.NotFound, "link not found")
 	}
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		log.Printf("ExpandURL: %v", err)
+		return nil, status.Error(codes.Internal, "internal error")
 	}
-	return &pb.URLExpandResponse{Result: originalURL}, nil
+	return pb.URLExpandResponse_builder{
+		Result: proto.String(originalURL),
+	}.Build(), nil
 }
 
 // ListUserURLs возвращает ссылки текущего пользователя.
-func (s *Server) ListUserURLs(ctx context.Context, _ *emptypb.Empty) (*pb.UserURLsResponse, error) {
+func (s *Server) ListUserURLs(ctx context.Context, _ *pb.ListUserURLsRequest) (*pb.UserURLsResponse, error) {
 	links, err := s.app.ListUserURLs(ctx)
 	if errors.Is(err, app.ErrUnauthorized) || errors.Is(err, app.ErrEmptyAuth) {
 		return nil, status.Error(codes.Unauthenticated, "unauthorized")
 	}
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		log.Printf("ListUserURLs: %v", err)
+		return nil, status.Error(codes.Internal, "internal error")
 	}
 	out := make([]*pb.URLData, 0, len(links))
 	for _, l := range links {
-		out = append(out, &pb.URLData{ShortUrl: l.ShortURL, OriginalUrl: l.OriginalURL})
+		out = append(out, pb.URLData_builder{
+			ShortUrl:    proto.String(l.ShortURL),
+			OriginalUrl: proto.String(l.OriginalURL),
+		}.Build())
 	}
-	return &pb.UserURLsResponse{Url: out}, nil
+	return pb.UserURLsResponse_builder{Url: out}.Build(), nil
 }

@@ -16,7 +16,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/proto"
 )
 
 func startTestClient(t *testing.T) (pb.ShortenerServiceClient, func()) {
@@ -53,7 +53,9 @@ func TestGRPC_ShortenAndExpand(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	shortenResp, err := client.ShortenURL(ctx, &pb.URLShortenRequest{Url: "https://example.com/grpc"})
+	shortenResp, err := client.ShortenURL(ctx, pb.URLShortenRequest_builder{
+		Url: proto.String("https://example.com/grpc"),
+	}.Build())
 	if err != nil {
 		t.Fatalf("ShortenURL: %v", err)
 	}
@@ -62,7 +64,9 @@ func TestGRPC_ShortenAndExpand(t *testing.T) {
 	}
 
 	shortCode := shortenResp.GetResult()[len(shortenResp.GetResult())-8:]
-	expandResp, err := client.ExpandURL(ctx, &pb.URLExpandRequest{Id: shortCode})
+	expandResp, err := client.ExpandURL(ctx, pb.URLExpandRequest_builder{
+		Id: proto.String(shortCode),
+	}.Build())
 	if err != nil {
 		t.Fatalf("ExpandURL: %v", err)
 	}
@@ -76,7 +80,7 @@ func TestGRPC_ListUserURLs_requiresAuth(t *testing.T) {
 	defer cleanup()
 
 	ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("authorization", ""))
-	_, err := client.ListUserURLs(ctx, &emptypb.Empty{})
+	_, err := client.ListUserURLs(ctx, pb.ListUserURLsRequest_builder{}.Build())
 	if status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("code = %v, err = %v", status.Code(err), err)
 	}
@@ -91,12 +95,14 @@ func TestGRPC_ListUserURLs_withAuth(t *testing.T) {
 	token := auth.SignUserID(userID, secret)
 	ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("authorization", token))
 
-	shortenResp, err := client.ShortenURL(ctx, &pb.URLShortenRequest{Url: "https://example.com/mine-grpc"})
+	shortenResp, err := client.ShortenURL(ctx, pb.URLShortenRequest_builder{
+		Url: proto.String("https://example.com/mine-grpc"),
+	}.Build())
 	if err != nil {
 		t.Fatalf("ShortenURL: %v", err)
 	}
 
-	listResp, err := client.ListUserURLs(ctx, &emptypb.Empty{})
+	listResp, err := client.ListUserURLs(ctx, pb.ListUserURLsRequest_builder{}.Build())
 	if err != nil {
 		t.Fatalf("ListUserURLs: %v", err)
 	}
@@ -115,7 +121,9 @@ func TestGRPC_ExpandURL_notFound(t *testing.T) {
 	client, cleanup := startTestClient(t)
 	defer cleanup()
 
-	_, err := client.ExpandURL(context.Background(), &pb.URLExpandRequest{Id: "missing1"})
+	_, err := client.ExpandURL(context.Background(), pb.URLExpandRequest_builder{
+		Id: proto.String("missing1"),
+	}.Build())
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("code = %v, err = %v", status.Code(err), err)
 	}
@@ -146,7 +154,9 @@ func TestGRPC_ExpandURL_deleted(t *testing.T) {
 		UUID: 1, ShortURL: "http://localhost/deleted1", OriginalURL: "https://deleted.example", IsDeleted: true,
 	})
 
-	_, err = client.ExpandURL(context.Background(), &pb.URLExpandRequest{Id: "deleted1"})
+	_, err = client.ExpandURL(context.Background(), pb.URLExpandRequest_builder{
+		Id: proto.String("deleted1"),
+	}.Build())
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("code = %v, err = %v", status.Code(err), err)
 	}
@@ -173,9 +183,14 @@ func TestGRPC_ShortenURL_internalError(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 	client := pb.NewShortenerServiceClient(conn)
 
-	_, err = client.ShortenURL(context.Background(), &pb.URLShortenRequest{Url: "https://example.com/bad-base"})
+	_, err = client.ShortenURL(context.Background(), pb.URLShortenRequest_builder{
+		Url: proto.String("https://example.com/bad-base"),
+	}.Build())
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("code = %v, err = %v", status.Code(err), err)
+	}
+	if st, ok := status.FromError(err); !ok || st.Message() != "internal error" {
+		t.Fatalf("message = %q, want %q", st.Message(), "internal error")
 	}
 }
 
@@ -186,9 +201,12 @@ func TestGRPC_ListUserURLs_storeError(t *testing.T) {
 	srv := NewServer(shortenerApp, "secret")
 
 	ctx := auth.WithUserID(context.Background(), "user-1")
-	_, err := srv.ListUserURLs(ctx, &emptypb.Empty{})
+	_, err := srv.ListUserURLs(ctx, pb.ListUserURLsRequest_builder{}.Build())
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("code = %v, err = %v", status.Code(err), err)
+	}
+	if st, ok := status.FromError(err); !ok || st.Message() != "internal error" {
+		t.Fatalf("message = %q, want %q", st.Message(), "internal error")
 	}
 }
 

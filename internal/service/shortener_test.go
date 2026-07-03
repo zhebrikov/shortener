@@ -158,3 +158,4 @@ func (e errStore) SoftDeleteURLsByUser(string, []string) error     { return e.er
 func (e errStore) GetLinkByShortCode(string) (storage.Link, error) { return storage.Link{}, e.err }
 func (e errStore) CountURLs() (int, error)                           { return 0, e.err }
 func (e errStore) CountUsers() (int, error)                          { return 0, e.err }
+func (e errStore) Stats() (int, int, error)                          { return 0, 0, e.err }

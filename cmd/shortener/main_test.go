@@ -1385,6 +1385,16 @@ func TestNewApp_invalidServerAddress(t *testing.T) {
 	}
 }
 
+func TestNewApp_invalidTrustedSubnet(t *testing.T) {
+	if _, err := newApp(Config{
+		ServerAddress: defaultServerAddress,
+		BaseURL:       defaultBaseURL,
+		TrustedSubnet: "not-cidr",
+	}, defaultAppDeps()); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestRun_flagParseError(t *testing.T) {
 	err := runWithDeps([]string{"-unknown-flag"}, defaultRunDeps())
 	if err == nil {
