@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,17 +21,20 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/soheilhy/cmux"
 	"github.com/zhebrikov/shortener/internal/asyncdelete"
 	"github.com/zhebrikov/shortener/internal/audit"
 	"github.com/zhebrikov/shortener/internal/auth"
 	appconfig "github.com/zhebrikov/shortener/internal/config"
 	"github.com/zhebrikov/shortener/internal/db/postgresql"
+	"github.com/zhebrikov/shortener/internal/grpcserver"
 	"github.com/zhebrikov/shortener/internal/handler"
 	"github.com/zhebrikov/shortener/internal/logger"
 	"github.com/zhebrikov/shortener/internal/middleware"
 	"github.com/zhebrikov/shortener/internal/service"
 	"github.com/zhebrikov/shortener/internal/storage"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 )
 
 var (
@@ -59,6 +64,7 @@ type Config struct {
 	EnableHTTPS   bool
 	TLSCertFile   string
 	TLSKeyFile    string
+	TrustedSubnet string
 }
 
 func defaultConfig() Config {
@@ -106,6 +112,9 @@ func applyFileConfig(cfg Config, file appconfig.File) Config {
 	if file.EnableHTTPS != nil {
 		cfg.EnableHTTPS = *file.EnableHTTPS
 	}
+	if file.TrustedSubnet != nil {
+		cfg.TrustedSubnet = *file.TrustedSubnet
+	}
 	return cfg
 }
 
@@ -142,6 +151,9 @@ func applyVisitedFlags(cfg Config, visited map[string]bool, flags Config) Config
 	}
 	if visited["tls-key"] {
 		cfg.TLSKeyFile = flags.TLSKeyFile
+	}
+	if visited["t"] {
+		cfg.TrustedSubnet = flags.TrustedSubnet
 	}
 	return cfg
 }
@@ -196,6 +208,10 @@ func getConfig(defaults Config) (Config, error) {
 	if !ok || tlsKeyFile == "" {
 		tlsKeyFile = defaults.TLSKeyFile
 	}
+	trustedSubnet, ok := os.LookupEnv("TRUSTED_SUBNET")
+	if !ok || trustedSubnet == "" {
+		trustedSubnet = defaults.TrustedSubnet
+	}
 	return Config{
 		ServerAddress: serverAddress,
 		BaseURL:       baseURL,
@@ -208,6 +224,7 @@ func getConfig(defaults Config) (Config, error) {
 		EnableHTTPS:   enableHTTPS,
 		TLSCertFile:   tlsCertFile,
 		TLSKeyFile:    tlsKeyFile,
+		TrustedSubnet: trustedSubnet,
 	}, nil
 }
 
@@ -220,14 +237,18 @@ func portFromServerAddress(serverAddress string) (string, error) {
 	return serverAddress[idx:], nil
 }
 
-// app собирает HTTP-приложение из конфигурации (для main и тестов).
+// app собирает HTTP- и gRPC-приложение из конфигурации (для main и тестов).
 type app struct {
-	Handler http.Handler
-	Addr    string
-	Port    string
-	Log     *zap.Logger
-	Deleter *asyncdelete.Worker
-	DB      *sql.DB
+	Handler     http.Handler
+	GRPCServer  *grpc.Server
+	Addr        string
+	Port        string
+	Log         *zap.Logger
+	Deleter     *asyncdelete.Worker
+	DB          *sql.DB
+	EnableHTTPS bool
+	TLSCertFile string
+	TLSKeyFile  string
 }
 
 // appDeps группирует зависимости для [newApp] (подменяются в тестах).
@@ -300,6 +321,11 @@ func newApp(cfg Config, ad appDeps) (*app, error) {
 
 	h := handler.NewShortenerHandler(shortener, store, deleter, auditPub)
 
+	trustedSubnet, err := middleware.ParseTrustedSubnet(cfg.TrustedSubnet)
+	if err != nil {
+		return nil, err
+	}
+
 	r := chi.NewRouter()
 	r.Use(logger.Middleware(zapLog))
 	r.Use(middleware.Gzip)
@@ -308,45 +334,101 @@ func newApp(cfg Config, ad appDeps) (*app, error) {
 	r.Get("/{shortCode}", h.GetLink)
 	r.Post("/api/shorten", h.CreateLinkJSON)
 	r.Get("/ping", handler.HealthCheck(db))
+	if trustedSubnet.IsConfigured() {
+		r.Route("/api/internal", func(r chi.Router) {
+			r.Use(middleware.TrustedSubnetOnly(trustedSubnet))
+			r.Get("/stats", handler.InternalStats(store))
+		})
+	}
 	r.Post("/api/shorten/batch", h.CreateLinkBatch)
-	r.Get("/api/user/urls", func(w http.ResponseWriter, r *http.Request) {
-		handler.ListUserURLs(w, r, store)
-	})
+	r.Get("/api/user/urls", h.ListUserURLs)
 	r.Delete("/api/user/urls", h.DeleteUserURLs)
 
+	grpcSrv := grpcserver.NewGRPCServer(h.App(), secretKey)
+
 	return &app{
-		Handler: r,
-		Addr:    cfg.ServerAddress,
-		Port:    port,
-		Log:     zapLog,
-		Deleter: deleter,
-		DB:      db,
+		Handler:     r,
+		GRPCServer:  grpcSrv,
+		Addr:        cfg.ServerAddress,
+		Port:        port,
+		Log:         zapLog,
+		Deleter:     deleter,
+		DB:          db,
+		EnableHTTPS: cfg.EnableHTTPS,
+		TLSCertFile: cfg.TLSCertFile,
+		TLSKeyFile:  cfg.TLSKeyFile,
 	}, nil
 }
 
 // runDeps группирует зависимости для [run] (подменяются в тестах).
 type runDeps struct {
-	serve    func(srv *http.Server) error
-	serveTLS func(srv *http.Server, certFile, keyFile string) error
-	shutdown func(ctx context.Context, srv *http.Server) error
+	serve    func(httpSrv *http.Server, grpcSrv *grpc.Server, application *app) error
+	shutdown func(ctx context.Context, srv *http.Server, grpcSrv *grpc.Server) error
 	logSync  func(*zap.Logger) error
 }
 
 func defaultRunDeps() runDeps {
 	return runDeps{
-		serve: func(srv *http.Server) error {
-			return srv.ListenAndServe()
-		},
-		serveTLS: func(srv *http.Server, certFile, keyFile string) error {
-			return srv.ListenAndServeTLS(certFile, keyFile)
-		},
-		shutdown: func(ctx context.Context, srv *http.Server) error {
-			return srv.Shutdown(ctx)
-		},
+		serve:    serveHTTPAndGRPC,
+		shutdown: shutdownHTTPAndGRPC,
 		logSync: func(l *zap.Logger) error {
 			return l.Sync()
 		},
 	}
+}
+
+func serveHTTPAndGRPC(httpSrv *http.Server, grpcSrv *grpc.Server, application *app) error {
+	lis, err := net.Listen("tcp", application.Addr)
+	if err != nil {
+		return err
+	}
+	if application.EnableHTTPS {
+		cert, err := tls.LoadX509KeyPair(application.TLSCertFile, application.TLSKeyFile)
+		if err != nil {
+			return err
+		}
+		lis = tls.NewListener(lis, &tls.Config{Certificates: []tls.Certificate{cert}})
+	}
+
+	m := cmux.New(lis)
+	grpcL := m.MatchWithWriters(cmux.HTTP2MatchHeaderFieldSendSettings("content-type", "application/grpc"))
+	httpL := m.Match(cmux.HTTP1Fast())
+
+	errCh := make(chan error, 2)
+	go func() {
+		if err := grpcSrv.Serve(grpcL); err != nil {
+			errCh <- err
+		}
+	}()
+	go func() {
+		if err := httpSrv.Serve(httpL); err != nil && err != http.ErrServerClosed {
+			errCh <- err
+		}
+	}()
+	go func() {
+		if err := m.Serve(); err != nil {
+			errCh <- err
+		}
+	}()
+
+	return <-errCh
+}
+
+func shutdownHTTPAndGRPC(ctx context.Context, srv *http.Server, grpcSrv *grpc.Server) error {
+	stopped := make(chan struct{})
+	go func() {
+		grpcSrv.GracefulStop()
+		close(stopped)
+	}()
+	if err := srv.Shutdown(ctx); err != nil {
+		return err
+	}
+	select {
+	case <-stopped:
+	case <-ctx.Done():
+		grpcSrv.Stop()
+	}
+	return nil
 }
 
 func run(ctx context.Context, args []string, d runDeps, getConfigFn func(Config) (Config, error), ad appDeps) error {
@@ -365,6 +447,7 @@ func run(ctx context.Context, args []string, d runDeps, getConfigFn func(Config)
 	enableHTTPSFlag := fs.Bool("s", false, "enable HTTPS (or ENABLE_HTTPS env)")
 	tlsCertFlag := fs.String("tls-cert", defaultTLSCertFile, "path to TLS certificate file (or TLS_CERT env)")
 	tlsKeyFlag := fs.String("tls-key", defaultTLSKeyFile, "path to TLS private key file (or TLS_KEY env)")
+	trustedSubnetFlag := fs.String("t", "", "trusted subnet CIDR for internal API (or TRUSTED_SUBNET env)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -397,6 +480,7 @@ func run(ctx context.Context, args []string, d runDeps, getConfigFn func(Config)
 		EnableHTTPS:   *enableHTTPSFlag,
 		TLSCertFile:   *tlsCertFlag,
 		TLSKeyFile:    *tlsKeyFlag,
+		TrustedSubnet: *trustedSubnetFlag,
 	}
 	cfg = applyVisitedFlags(cfg, visited, flagCfg)
 
@@ -419,17 +503,12 @@ func run(ctx context.Context, args []string, d runDeps, getConfigFn func(Config)
 	if cfg.EnableHTTPS {
 		scheme = "https"
 	}
-	application.Log.Info("server started", zap.String("address", scheme+"://localhost"+application.Port))
+	application.Log.Info("server started", zap.String("address", scheme+"://localhost"+application.Port), zap.Bool("grpc", true))
 
-	srv := &http.Server{Addr: application.Addr, Handler: application.Handler}
+	srv := &http.Server{Handler: application.Handler}
 	serveErr := make(chan error, 1)
 	go func() {
-		var errServe error
-		if cfg.EnableHTTPS {
-			errServe = d.serveTLS(srv, cfg.TLSCertFile, cfg.TLSKeyFile)
-		} else {
-			errServe = d.serve(srv)
-		}
+		errServe := d.serve(srv, application.GRPCServer, application)
 		if errServe != nil && errServe != http.ErrServerClosed {
 			serveErr <- errServe
 		}
@@ -445,9 +524,9 @@ func run(ctx context.Context, args []string, d runDeps, getConfigFn func(Config)
 	defer cancel()
 	sd := d.shutdown
 	if sd == nil {
-		sd = func(ctx context.Context, srv *http.Server) error { return srv.Shutdown(ctx) }
+		sd = shutdownHTTPAndGRPC
 	}
-	if err := sd(shutdownCtx, srv); err != nil {
+	if err := sd(shutdownCtx, srv, application.GRPCServer); err != nil {
 		application.Log.Error("server shutdown", zap.Error(err))
 	}
 	application.Deleter.Shutdown()

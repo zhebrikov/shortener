@@ -39,6 +39,9 @@ func (e errReadStore) SoftDeleteURLsByUser(string, []string) error     { return 
 func (e errReadStore) GetLinkByShortCode(string) (storage.Link, error) {
 	return storage.Link{}, e.err
 }
+func (e errReadStore) CountURLs() (int, error)  { return 0, e.err }
+func (e errReadStore) CountUsers() (int, error) { return 0, e.err }
+func (e errReadStore) Stats() (int, int, error) { return 0, 0, e.err }
 
 type badShortenerStore struct {
 	*storage.MemoryStorage

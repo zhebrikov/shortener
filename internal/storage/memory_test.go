@@ -227,3 +227,28 @@ func TestMemoryStorage_WriteStorage_duplicate(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestMemoryStorage_CountURLsAndUsers(t *testing.T) {
+	m := NewMemoryStorage()
+	urls, err := m.CountURLs()
+	if err != nil || urls != 0 {
+		t.Fatalf("CountURLs() = %d, %v; want 0, nil", urls, err)
+	}
+	users, err := m.CountUsers()
+	if err != nil || users != 0 {
+		t.Fatalf("CountUsers() = %d, %v; want 0, nil", users, err)
+	}
+
+	_ = m.WriteStorage(Link{UUID: 1, ShortURL: "a", OriginalURL: "https://a.com", UserID: "u1"})
+	_ = m.WriteStorage(Link{UUID: 2, ShortURL: "b", OriginalURL: "https://b.com", UserID: "u2"})
+	_ = m.WriteStorage(Link{UUID: 3, ShortURL: "c", OriginalURL: "https://c.com", UserID: "u1"})
+
+	urls, err = m.CountURLs()
+	if err != nil || urls != 3 {
+		t.Fatalf("CountURLs() = %d, %v; want 3, nil", urls, err)
+	}
+	users, err = m.CountUsers()
+	if err != nil || users != 2 {
+		t.Fatalf("CountUsers() = %d, %v; want 2, nil", users, err)
+	}
+}

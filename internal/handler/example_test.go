@@ -9,22 +9,28 @@ import (
 	"net/http/httptest"
 	"strings"
 
+	"github.com/zhebrikov/shortener/internal/asyncdelete"
 	"github.com/zhebrikov/shortener/internal/auth"
 	"github.com/zhebrikov/shortener/internal/handler"
 	"github.com/zhebrikov/shortener/internal/service"
 	"github.com/zhebrikov/shortener/internal/storage"
 )
 
+func exampleHandler(shortener *service.Shortener, store storage.LinkStore) *handler.ShortenerHandler {
+	return handler.NewShortenerHandler(shortener, store, asyncdelete.NewWorker(store), nil)
+}
+
 // Example демонстрирует типичный сценарий: создать короткую ссылку и выполнить редирект.
 func Example() {
 	shortener := service.NewShortener("localhost:8080")
 	store := storage.NewMemoryStorage()
+	h := exampleHandler(shortener, store)
 
 	// POST / — сокращение URL (text/plain).
 	createReq := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("https://example.com/page"))
 	createReq.Header.Set("Content-Type", "text/plain")
 	createRR := httptest.NewRecorder()
-	handler.CreateLink(createRR, createReq, shortener, store, nil)
+	handler.CreateLink(createRR, createReq, h)
 	fmt.Println(createRR.Code)
 
 	shortURL := strings.TrimSpace(createRR.Body.String())
@@ -33,7 +39,7 @@ func Example() {
 	// GET /{shortCode} — редирект на оригинал.
 	getReq := httptest.NewRequest(http.MethodGet, "/"+shortCode, nil)
 	getRR := httptest.NewRecorder()
-	handler.GetLink(getRR, getReq, shortener, store, nil)
+	handler.GetLink(getRR, getReq, h)
 	fmt.Println(getRR.Code)
 	fmt.Println(getRR.Header().Get("Location"))
 
@@ -63,12 +69,13 @@ func ExampleNewShortenerHandler() {
 func ExampleCreateLink() {
 	shortener := service.NewShortener("localhost:8080")
 	store := storage.NewMemoryStorage()
+	h := exampleHandler(shortener, store)
 
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("https://example.com/page"))
 	req.Header.Set("Content-Type", "text/plain")
 	rr := httptest.NewRecorder()
 
-	handler.CreateLink(rr, req, shortener, store, nil)
+	handler.CreateLink(rr, req, h)
 	fmt.Println(rr.Code)
 
 	// Output:
@@ -92,7 +99,7 @@ func ExampleGetLink() {
 	req := httptest.NewRequest(http.MethodGet, "/"+shortCode, nil)
 	rr := httptest.NewRecorder()
 
-	handler.GetLink(rr, req, shortener, store, nil)
+	handler.GetLink(rr, req, exampleHandler(shortener, store))
 	fmt.Println(rr.Code)
 	fmt.Println(rr.Header().Get("Location"))
 
@@ -105,12 +112,13 @@ func ExampleGetLink() {
 func ExampleCreateLinkJSON() {
 	shortener := service.NewShortener("localhost:8080")
 	store := storage.NewMemoryStorage()
+	h := exampleHandler(shortener, store)
 
 	body, _ := json.Marshal(handler.Input{URL: "https://example.com/page"})
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
 	rr := httptest.NewRecorder()
 
-	handler.CreateLinkJSON(rr, req, shortener, store, nil)
+	handler.CreateLinkJSON(rr, req, h)
 	fmt.Println(rr.Code)
 
 	// Output:
@@ -168,7 +176,7 @@ func ExampleListUserURLs() {
 	req = req.WithContext(ctx)
 	rr := httptest.NewRecorder()
 
-	handler.ListUserURLs(rr, req, store)
+	handler.ListUserURLs(rr, req, exampleHandler(service.NewShortener("localhost:8080"), store))
 	fmt.Println(rr.Code)
 
 	// Output:

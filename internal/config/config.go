@@ -18,6 +18,7 @@ type File struct {
 	AuditFile       *string `json:"audit_file"`
 	AuditURL        *string `json:"audit_url"`
 	EnableHTTPS     *bool   `json:"enable_https"`
+	TrustedSubnet   *string `json:"trusted_subnet"`
 }
 
 // LoadFile reads and parses a JSON configuration file at path.

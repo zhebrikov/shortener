@@ -61,7 +61,8 @@ func TestCreateLink_auditAfter201(t *testing.T) {
 	req = req.WithContext(auth.WithUserID(req.Context(), "user-xyz"))
 
 	rr := httptest.NewRecorder()
-	CreateLink(rr, req, shortener, store, pub)
+	h := newTestHandler(shortener, store, pub)
+	CreateLink(rr, req, h)
 
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("status %d", rr.Code)
@@ -90,13 +91,14 @@ func TestCreateLink_auditNotOn409Duplicate(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "text/plain")
 
-	CreateLink(httptest.NewRecorder(), req, shortener, store, pub)
+	h := newTestHandler(shortener, store, pub)
+	CreateLink(httptest.NewRecorder(), req, h)
 	readOneAudit(t, ch)
 
 	req2 := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
 	req2.Header.Set("Content-Type", "text/plain")
 	rr2 := httptest.NewRecorder()
-	CreateLink(rr2, req2, shortener, store, pub)
+	CreateLink(rr2, req2, h)
 
 	if rr2.Code != http.StatusConflict {
 		t.Fatalf("second POST: status %d, want 409", rr2.Code)
@@ -114,7 +116,8 @@ func TestCreateLinkJSON_auditAfter201(t *testing.T) {
 	req = req.WithContext(auth.WithUserID(req.Context(), "uid-json"))
 
 	rr := httptest.NewRecorder()
-	CreateLinkJSON(rr, req, shortener, store, pub)
+	h := newTestHandler(shortener, store, pub)
+	CreateLinkJSON(rr, req, h)
 
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("status %d", rr.Code)
@@ -133,11 +136,12 @@ func TestCreateLinkJSON_auditNotOn409Duplicate(t *testing.T) {
 	url := "https://dup-json.example/x"
 	payload := mustMarshal(t, Input{URL: url})
 
-	CreateLinkJSON(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(payload)), shortener, store, pub)
+	h := newTestHandler(shortener, store, pub)
+	CreateLinkJSON(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(payload)), h)
 	readOneAudit(t, ch)
 
 	rr2 := httptest.NewRecorder()
-	CreateLinkJSON(rr2, httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(payload)), shortener, store, pub)
+	CreateLinkJSON(rr2, httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(payload)), h)
 	if rr2.Code != http.StatusConflict {
 		t.Fatalf("status %d", rr2.Code)
 	}
@@ -158,7 +162,8 @@ func TestGetLink_auditOn307(t *testing.T) {
 	req = req.WithContext(auth.WithUserID(req.Context(), "follower"))
 
 	rr := httptest.NewRecorder()
-	GetLink(rr, req, shortener, store, pub)
+	h := newTestHandler(shortener, store, pub)
+	GetLink(rr, req, h)
 
 	if rr.Code != http.StatusTemporaryRedirect {
 		t.Fatalf("status %d", rr.Code)
@@ -175,7 +180,7 @@ func TestGetLink_auditNotOn404(t *testing.T) {
 	pub, ch := newTestAuditPublisher(2)
 
 	req := httptest.NewRequest(http.MethodGet, "/nope", nil)
-	GetLink(httptest.NewRecorder(), req, shortener, store, pub)
+	GetLink(httptest.NewRecorder(), req, newTestHandler(shortener, store, pub))
 	expectNoAudit(t, ch, 300*time.Millisecond)
 }
 
@@ -189,7 +194,7 @@ func TestGetLink_auditNotOn410(t *testing.T) {
 	pub, ch := newTestAuditPublisher(2)
 
 	req := httptest.NewRequest(http.MethodGet, "/"+shortCode, nil)
-	GetLink(httptest.NewRecorder(), req, shortener, store, pub)
+	GetLink(httptest.NewRecorder(), req, newTestHandler(shortener, store, pub))
 	expectNoAudit(t, ch, 300*time.Millisecond)
 }
 

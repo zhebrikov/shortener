@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/zhebrikov/shortener/internal/asyncdelete"
+	"github.com/zhebrikov/shortener/internal/audit"
+	"github.com/zhebrikov/shortener/internal/service"
 	"github.com/zhebrikov/shortener/internal/storage"
 )
 
@@ -16,4 +19,8 @@ func mustTempStorage(t *testing.T, content string) *storage.Storage {
 		t.Fatal(err)
 	}
 	return storage.NewStorage(filename)
+}
+
+func newTestHandler(shortener *service.Shortener, store storage.LinkStore, auditPub *audit.Publisher) *ShortenerHandler {
+	return NewShortenerHandler(shortener, store, asyncdelete.NewWorker(store), auditPub)
 }

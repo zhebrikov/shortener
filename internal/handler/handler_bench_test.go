@@ -39,13 +39,14 @@ func BenchmarkCreateLinkJSON(b *testing.B) {
 	store := storage.NewMemoryStorage()
 	body, _ := json.Marshal(Input{URL: "https://practicum.yandex.ru/new"})
 
+	h := newTestHandler(shortener, store, nil)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		rr := httptest.NewRecorder()
-		CreateLinkJSON(rr, req, shortener, store, nil)
+		CreateLinkJSON(rr, req, h)
 		if rr.Code != http.StatusCreated && rr.Code != http.StatusConflict {
 			b.Fatalf("status %d", rr.Code)
 		}
@@ -62,7 +63,7 @@ func BenchmarkGetLink(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rr := httptest.NewRecorder()
-		GetLink(rr, req, shortener, store, nil)
+		GetLink(rr, req, newTestHandler(shortener, store, nil))
 		if rr.Code != http.StatusTemporaryRedirect {
 			b.Fatalf("status %d", rr.Code)
 		}
@@ -80,7 +81,7 @@ func BenchmarkCreateLink_plain(b *testing.B) {
 		req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "text/plain")
 		rr := httptest.NewRecorder()
-		CreateLink(rr, req, shortener, store, nil)
+		CreateLink(rr, req, newTestHandler(shortener, store, nil))
 		if rr.Code != http.StatusCreated && rr.Code != http.StatusConflict {
 			b.Fatalf("status %d", rr.Code)
 		}

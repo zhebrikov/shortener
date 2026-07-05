@@ -2,15 +2,9 @@ package handler
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"log"
 	"net/http"
-
-	"github.com/zhebrikov/shortener/internal/audit"
-	"github.com/zhebrikov/shortener/internal/auth"
-	"github.com/zhebrikov/shortener/internal/service"
-	"github.com/zhebrikov/shortener/internal/storage"
 )
 
 // Input — тело запроса POST /api/shorten.
@@ -24,13 +18,7 @@ type Output struct {
 }
 
 // CreateLinkJSON сокращает URL из JSON-тела запроса и сохраняет запись в хранилище.
-func CreateLinkJSON(
-	w http.ResponseWriter,
-	r *http.Request,
-	shortener *service.Shortener,
-	store storage.LinkStore,
-	auditPub *audit.Publisher,
-) {
+func CreateLinkJSON(w http.ResponseWriter, r *http.Request, h *ShortenerHandler) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -44,50 +32,18 @@ func CreateLinkJSON(
 		return
 	}
 
-	shortURL, err := shortener.CreateLink(input.URL)
+	result, err := h.app.ShortenURL(r.Context(), input.URL)
 	if err != nil {
-		log.Printf("CreateLinkJSON: shortener.CreateLink: %v", err)
+		log.Printf("CreateLinkJSON: ShortenURL: %v", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 
-	nextUUID, err := storage.NewLinkUUID()
-	if err != nil {
-		log.Printf("CreateLinkJSON: storage.NewLinkUUID: %v", err)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-
-	userID, _ := auth.UserIDFromContext(r.Context())
-	newRecord := storage.Link{
-		UUID:        nextUUID,
-		ShortURL:    shortURL,
-		OriginalURL: input.URL,
-		UserID:      userID,
-	}
-
-	err = store.WriteStorage(newRecord)
-	if err != nil {
-		if errors.Is(err, storage.ErrDuplicateURL) {
-			existingShort, getErr := store.GetShortURLByOriginalURL(input.URL)
-			if getErr != nil {
-				log.Printf("CreateLinkJSON: store.GetShortURLByOriginalURL: %v", getErr)
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusConflict)
-			resultJSON, _ := json.Marshal(Output{Result: existingShort})
-			w.Write(resultJSON)
-			return
-		}
-		log.Printf("CreateLinkJSON: store.WriteStorage: %v", err)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-
-	publishAudit(auditPub, r, audit.ActionShorten, input.URL)
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(Output{Result: shortURL})
+	if result.IsConflict {
+		w.WriteHeader(http.StatusConflict)
+	} else {
+		w.WriteHeader(http.StatusCreated)
+	}
+	_ = json.NewEncoder(w).Encode(Output{Result: result.ShortURL})
 }

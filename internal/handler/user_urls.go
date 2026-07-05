@@ -2,11 +2,11 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 
-	"github.com/zhebrikov/shortener/internal/auth"
-	"github.com/zhebrikov/shortener/internal/storage"
+	"github.com/zhebrikov/shortener/internal/app"
 )
 
 // UserURLItem — пара сокращённого и оригинального URL в ответе GET /api/user/urls.
@@ -16,19 +16,14 @@ type UserURLItem struct {
 }
 
 // ListUserURLs возвращает все сокращённые пользователем URL.
-func ListUserURLs(w http.ResponseWriter, r *http.Request, store storage.LinkStore) {
-	if auth.EmptyAuthCookieFromContext(r.Context()) {
+func ListUserURLs(w http.ResponseWriter, r *http.Request, h *ShortenerHandler) {
+	links, err := h.app.ListUserURLs(r.Context())
+	if errors.Is(err, app.ErrUnauthorized) || errors.Is(err, app.ErrEmptyAuth) {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
-	userID, ok := auth.UserIDFromContext(r.Context())
-	if !ok {
-		w.WriteHeader(http.StatusUnauthorized)
-		return
-	}
-	links, err := store.GetLinksByUserID(userID)
 	if err != nil {
-		log.Printf("ListUserURLs: GetLinksByUserID: %v", err)
+		log.Printf("ListUserURLs: ListUserURLs: %v", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}

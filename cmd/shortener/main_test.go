@@ -32,6 +32,7 @@ import (
 	"github.com/zhebrikov/shortener/internal/service"
 	"github.com/zhebrikov/shortener/internal/storage"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 )
 
 // storageFromTestFile создаёт временный JSON-файл для тестов storage (пустой массив).
@@ -81,22 +82,9 @@ func runUntilCancel(args []string, d runDeps) error {
 	if origServe == nil {
 		origServe = defaultRunDeps().serve
 	}
-	d.serve = func(srv *http.Server) error {
+	d.serve = func(srv *http.Server, grpcSrv *grpc.Server, application *app) error {
 		signalReady()
-		if err := origServe(srv); err != nil && err != http.ErrServerClosed {
-			return err
-		}
-		<-ctx.Done()
-		return nil
-	}
-
-	origServeTLS := d.serveTLS
-	if origServeTLS == nil {
-		origServeTLS = defaultRunDeps().serveTLS
-	}
-	d.serveTLS = func(srv *http.Server, certFile, keyFile string) error {
-		signalReady()
-		if err := origServeTLS(srv, certFile, keyFile); err != nil && err != http.ErrServerClosed {
+		if err := origServe(srv, grpcSrv, application); err != nil && err != http.ErrServerClosed {
 			return err
 		}
 		<-ctx.Done()
@@ -145,9 +133,7 @@ func routerFromMain(t *testing.T, baseURL string) http.Handler {
 	r.Get("/{shortCode}", h.GetLink)
 	r.Post("/api/shorten", h.CreateLinkJSON)
 	r.Post("/api/shorten/batch", h.CreateLinkBatch)
-	r.Get("/api/user/urls", func(w http.ResponseWriter, r *http.Request) {
-		handler.ListUserURLs(w, r, store)
-	})
+	r.Get("/api/user/urls", h.ListUserURLs)
 	r.Delete("/api/user/urls", h.DeleteUserURLs)
 	return r
 }
@@ -399,9 +385,16 @@ func TestGetConfig(t *testing.T) {
 func TestApplyFileConfig(t *testing.T) {
 	enableHTTPS := true
 	fileCfg := appconfig.File{
-		ServerAddress: strPtr("file:9090"),
-		BaseURL:       strPtr("http://file.example"),
-		EnableHTTPS:   &enableHTTPS,
+		ServerAddress:   strPtr("file:9090"),
+		BaseURL:         strPtr("http://file.example"),
+		FileStoragePath: strPtr("/tmp/links.json"),
+		DatabaseDSN:     strPtr("postgres://file"),
+		MigrationsPath:  strPtr("/migrations"),
+		SecretKey:       strPtr("file-secret"),
+		AuditFile:       strPtr("/tmp/audit.log"),
+		AuditURL:        strPtr("http://audit.example/hook"),
+		EnableHTTPS:     &enableHTTPS,
+		TrustedSubnet:   strPtr("10.0.0.0/8"),
 	}
 	got := applyFileConfig(defaultConfig(), fileCfg)
 	if got.ServerAddress != "file:9090" {
@@ -410,8 +403,29 @@ func TestApplyFileConfig(t *testing.T) {
 	if got.BaseURL != "http://file.example" {
 		t.Errorf("BaseURL = %q; want http://file.example", got.BaseURL)
 	}
+	if got.FileStorage != "/tmp/links.json" {
+		t.Errorf("FileStorage = %q", got.FileStorage)
+	}
+	if got.DatabaseDsn != "postgres://file" {
+		t.Errorf("DatabaseDsn = %q", got.DatabaseDsn)
+	}
+	if got.MigrationPath != "/migrations" {
+		t.Errorf("MigrationPath = %q", got.MigrationPath)
+	}
+	if got.SecretKey != "file-secret" {
+		t.Errorf("SecretKey = %q", got.SecretKey)
+	}
+	if got.AuditFile != "/tmp/audit.log" {
+		t.Errorf("AuditFile = %q", got.AuditFile)
+	}
+	if got.AuditURL != "http://audit.example/hook" {
+		t.Errorf("AuditURL = %q", got.AuditURL)
+	}
 	if !got.EnableHTTPS {
 		t.Error("EnableHTTPS = false; want true")
+	}
+	if got.TrustedSubnet != "10.0.0.0/8" {
+		t.Errorf("TrustedSubnet = %q", got.TrustedSubnet)
 	}
 }
 
@@ -421,20 +435,48 @@ func TestApplyVisitedFlags(t *testing.T) {
 		BaseURL:       "http://file.example",
 		EnableHTTPS:   true,
 	}
-	visited := map[string]bool{"a": true, "s": true, "tls-cert": true, "tls-key": true}
+	visited := map[string]bool{
+		"a": true, "b": true, "f": true, "d": true, "m": true, "k": true,
+		"audit-file": true, "audit-url": true, "s": true, "tls-cert": true, "tls-key": true, "t": true,
+	}
 	flagCfg := Config{
 		ServerAddress: "flag:8080",
-		BaseURL:       "http://file.example",
+		BaseURL:       "http://flag.example",
+		FileStorage:   "/flag/storage.json",
+		DatabaseDsn:   "postgres://flag",
+		MigrationPath: "/flag/migrations",
+		SecretKey:     "flag-secret",
+		AuditFile:     "/flag/audit.log",
+		AuditURL:      "http://flag.example/audit",
 		EnableHTTPS:   false,
 		TLSCertFile:   "/flag/cert.pem",
 		TLSKeyFile:    "/flag/key.pem",
+		TrustedSubnet: "192.168.0.0/16",
 	}
 	got := applyVisitedFlags(cfg, visited, flagCfg)
 	if got.ServerAddress != "flag:8080" {
 		t.Errorf("ServerAddress = %q; want flag:8080", got.ServerAddress)
 	}
-	if got.BaseURL != "http://file.example" {
-		t.Errorf("BaseURL = %q; want value from file when flag not visited", got.BaseURL)
+	if got.BaseURL != "http://flag.example" {
+		t.Errorf("BaseURL = %q; want http://flag.example", got.BaseURL)
+	}
+	if got.FileStorage != "/flag/storage.json" {
+		t.Errorf("FileStorage = %q", got.FileStorage)
+	}
+	if got.DatabaseDsn != "postgres://flag" {
+		t.Errorf("DatabaseDsn = %q", got.DatabaseDsn)
+	}
+	if got.MigrationPath != "/flag/migrations" {
+		t.Errorf("MigrationPath = %q", got.MigrationPath)
+	}
+	if got.SecretKey != "flag-secret" {
+		t.Errorf("SecretKey = %q", got.SecretKey)
+	}
+	if got.AuditFile != "/flag/audit.log" {
+		t.Errorf("AuditFile = %q", got.AuditFile)
+	}
+	if got.AuditURL != "http://flag.example/audit" {
+		t.Errorf("AuditURL = %q", got.AuditURL)
 	}
 	if got.EnableHTTPS {
 		t.Error("EnableHTTPS = true; want false from visited flag")
@@ -444,6 +486,9 @@ func TestApplyVisitedFlags(t *testing.T) {
 	}
 	if got.TLSKeyFile != "/flag/key.pem" {
 		t.Errorf("TLSKeyFile = %q; want /flag/key.pem", got.TLSKeyFile)
+	}
+	if got.TrustedSubnet != "192.168.0.0/16" {
+		t.Errorf("TrustedSubnet = %q", got.TrustedSubnet)
 	}
 }
 
@@ -461,14 +506,13 @@ func TestRun_configFile(t *testing.T) {
 
 	tlsCalled := false
 	d := defaultRunDeps()
-	d.serve = func(*http.Server) error {
-		t.Fatal("HTTP serve must not be called when config enables HTTPS")
-		return nil
-	}
-	d.serveTLS = func(srv *http.Server, _, _ string) error {
+	d.serve = func(_ *http.Server, _ *grpc.Server, application *app) error {
+		if !application.EnableHTTPS {
+			t.Fatal("expected HTTPS enabled from config file")
+		}
 		tlsCalled = true
-		if srv.Addr != "localhost:9091" {
-			t.Errorf("listen addr = %q; want localhost:9091", srv.Addr)
+		if application.Addr != "localhost:9091" {
+			t.Errorf("listen addr = %q; want localhost:9091", application.Addr)
 		}
 		return nil
 	}
@@ -492,8 +536,8 @@ func TestRun_configFileFlagOverridesFile(t *testing.T) {
 
 	var listenAddr string
 	d := defaultRunDeps()
-	d.serve = func(srv *http.Server) error {
-		listenAddr = srv.Addr
+	d.serve = func(_ *http.Server, _ *grpc.Server, application *app) error {
+		listenAddr = application.Addr
 		return nil
 	}
 	err := runUntilCancel([]string{"-c", configPath, "-a", "localhost:7070"}, d)
@@ -525,8 +569,8 @@ func TestRun_configFileEnvOverridesFileAndFlag(t *testing.T) {
 
 	var listenAddr string
 	d := defaultRunDeps()
-	d.serve = func(srv *http.Server) error {
-		listenAddr = srv.Addr
+	d.serve = func(_ *http.Server, _ *grpc.Server, application *app) error {
+		listenAddr = application.Addr
 		return nil
 	}
 	err := runUntilCancel([]string{"-c", configPath, "-a", "localhost:7070"}, d)
@@ -586,8 +630,8 @@ func TestRun_configPathFromEnv(t *testing.T) {
 
 	var listenAddr string
 	d := defaultRunDeps()
-	d.serve = func(srv *http.Server) error {
-		listenAddr = srv.Addr
+	d.serve = func(_ *http.Server, _ *grpc.Server, application *app) error {
+		listenAddr = application.Addr
 		return nil
 	}
 	err := runUntilCancel(nil, d)
@@ -1341,6 +1385,16 @@ func TestNewApp_invalidServerAddress(t *testing.T) {
 	}
 }
 
+func TestNewApp_invalidTrustedSubnet(t *testing.T) {
+	if _, err := newApp(Config{
+		ServerAddress: defaultServerAddress,
+		BaseURL:       defaultBaseURL,
+		TrustedSubnet: "not-cidr",
+	}, defaultAppDeps()); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestRun_flagParseError(t *testing.T) {
 	err := runWithDeps([]string{"-unknown-flag"}, defaultRunDeps())
 	if err == nil {
@@ -1370,7 +1424,7 @@ func TestRun_databaseConnectionError(t *testing.T) {
 
 func TestExitCode_success(t *testing.T) {
 	d := defaultRunDeps()
-	d.serve = func(*http.Server) error { return nil }
+	d.serve = func(_ *http.Server, _ *grpc.Server, _ *app) error { return nil }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -1390,7 +1444,7 @@ func TestMain_callsExit(t *testing.T) {
 	md := defaultMainDeps()
 	md.exit = func(c int) { code = c }
 	md.runDeps = defaultRunDeps()
-	md.runDeps.serve = func(*http.Server) error { return nil }
+	md.runDeps.serve = func(*http.Server, *grpc.Server, *app) error { return nil }
 	md.notifyContext = func() (context.Context, context.CancelFunc) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -1583,7 +1637,7 @@ func TestRun_shutdownOK(t *testing.T) {
 	}
 
 	d := defaultRunDeps()
-	d.serve = func(srv *http.Server) error {
+	d.serve = func(srv *http.Server, _ *grpc.Server, _ *app) error {
 		return srv.Serve(ln)
 	}
 	d.logSync = func(*zap.Logger) error { return nil }
@@ -1625,7 +1679,7 @@ func runWithDepsAndConfig(args []string, d runDeps, getConfigFn func(Config) (Co
 func TestRun_listenError(t *testing.T) {
 	want := errors.New("listen failed")
 	d := defaultRunDeps()
-	d.serve = func(*http.Server) error { return want }
+	d.serve = func(_ *http.Server, _ *grpc.Server, _ *app) error { return want }
 	err := run(context.Background(), nil, d, getConfig, defaultAppDeps())
 	if !errors.Is(err, want) {
 		t.Fatalf("run() err = %v, want %v", err, want)
@@ -1635,11 +1689,10 @@ func TestRun_listenError(t *testing.T) {
 func TestRun_enableHTTPS(t *testing.T) {
 	tlsCalled := false
 	d := defaultRunDeps()
-	d.serve = func(*http.Server) error {
-		t.Fatal("HTTP serve must not be called when HTTPS is enabled")
-		return nil
-	}
-	d.serveTLS = func(*http.Server, string, string) error {
+	d.serve = func(_ *http.Server, _ *grpc.Server, application *app) error {
+		if !application.EnableHTTPS {
+			t.Fatal("expected HTTPS enabled")
+		}
 		tlsCalled = true
 		return nil
 	}
@@ -1649,7 +1702,7 @@ func TestRun_enableHTTPS(t *testing.T) {
 		t.Fatalf("run() err = %v", err)
 	}
 	if !tlsCalled {
-		t.Fatal("expected appListenTLS to be called")
+		t.Fatal("expected HTTPS to be enabled")
 	}
 }
 
@@ -1658,11 +1711,10 @@ func TestRun_enableHTTPSFromEnv(t *testing.T) {
 	os.Setenv("ENABLE_HTTPS", "true")
 	tlsCalled := false
 	d := defaultRunDeps()
-	d.serve = func(*http.Server) error {
-		t.Fatal("HTTP serve must not be called when ENABLE_HTTPS is set")
-		return nil
-	}
-	d.serveTLS = func(*http.Server, string, string) error {
+	d.serve = func(_ *http.Server, _ *grpc.Server, application *app) error {
+		if !application.EnableHTTPS {
+			t.Fatal("expected HTTPS enabled from env")
+		}
 		tlsCalled = true
 		return nil
 	}
@@ -1679,20 +1731,19 @@ func TestRun_enableHTTPSFromEnv(t *testing.T) {
 		t.Fatalf("run() err = %v", err)
 	}
 	if !tlsCalled {
-		t.Fatal("expected appListenTLS to be called")
+		t.Fatal("expected HTTPS to be enabled from env")
 	}
 }
 
 func TestRun_tlsCertPathsFromFlags(t *testing.T) {
 	var gotCert, gotKey string
 	d := defaultRunDeps()
-	d.serve = func(*http.Server) error {
-		t.Fatal("HTTP serve must not be called when HTTPS is enabled")
-		return nil
-	}
-	d.serveTLS = func(_ *http.Server, certFile, keyFile string) error {
-		gotCert = certFile
-		gotKey = keyFile
+	d.serve = func(_ *http.Server, _ *grpc.Server, application *app) error {
+		if !application.EnableHTTPS {
+			t.Fatal("expected HTTPS enabled")
+		}
+		gotCert = application.TLSCertFile
+		gotKey = application.TLSKeyFile
 		return nil
 	}
 
@@ -1735,9 +1786,9 @@ func TestRun_tlsCertPathsFromEnv(t *testing.T) {
 
 	var gotCert, gotKey string
 	d := defaultRunDeps()
-	d.serveTLS = func(_ *http.Server, certFile, keyFile string) error {
-		gotCert = certFile
-		gotKey = keyFile
+	d.serve = func(_ *http.Server, _ *grpc.Server, application *app) error {
+		gotCert = application.TLSCertFile
+		gotKey = application.TLSKeyFile
 		return nil
 	}
 
@@ -1891,5 +1942,37 @@ func TestRunMigrations_upReturnsError(t *testing.T) {
 
 	if err := runMigrations("migrations", "postgres://unused", md); err == nil {
 		t.Fatal("expected migration up error")
+	}
+}
+
+func TestShutdownHTTPAndGRPC_contextTimeout(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	httpSrv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})}
+	grpcSrv := grpc.NewServer()
+
+	go func() { _ = httpSrv.Serve(ln) }()
+	t.Cleanup(func() { _ = httpSrv.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	defer cancel()
+	time.Sleep(time.Millisecond)
+
+	if err := shutdownHTTPAndGRPC(ctx, httpSrv, grpcSrv); err != nil {
+		t.Fatalf("shutdownHTTPAndGRPC() err = %v", err)
+	}
+}
+
+func TestServeHTTPAndGRPC_listenError(t *testing.T) {
+	application := &app{Addr: "invalid://not-a-tcp-address"}
+	err := serveHTTPAndGRPC(&http.Server{}, grpc.NewServer(), application)
+	if err == nil {
+		t.Fatal("expected listen error")
 	}
 }
